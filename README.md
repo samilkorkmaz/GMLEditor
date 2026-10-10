@@ -4,6 +4,10 @@ A Windows tool to view and edit GML line and polygon data in 3D, optionally
 draped over DTED terrain. **Current version: v0.3 — editing + DTED terrain.**
 See [version_plan.md](version_plan.md) for the full roadmap.
 
+DTED can be downloaded from: https://earthexplorer.usgs.gov/
+
+GeoTIFF can be downloaded from: https://geodataviewer.com/tools/satellite-download/
+
 ## Requirements
 
 - Python 3.10+

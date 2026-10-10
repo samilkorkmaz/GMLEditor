@@ -11,7 +11,7 @@
 | Version | Theme | Command line |
 |---|---|---|
 | v0.1 | GML display only **(DONE)** | `python -m gml_editor <gml> [--vexag N]` |
-| v0.2 | GML editing (select, delete, undo, export) | `app gml` |
+| v0.2 | GML editing (select, delete, undo, export) **(DONE)** | `python -m gml_editor <gml> [--vexag N]` |
 | v0.3 | DTED terrain + GML draped | `app dted gml` |
 | v0.4 | GeoTIFF texture | `app dted geotiff gml` |
 | v0.5 | CRS robustness and performance | same |
@@ -66,12 +66,16 @@ Example: `python -m gml_editor ankara_sample.gml --vexag 50`
 
 ---
 
-## v0.2: GML Editing
+## v0.2: GML Editing — **DONE**
 
 **Goal:** Deliver the full interaction loop on the simplest data, before terrain complicates picking.
 
+**Controls:** left-click select · `Delete` remove · `Ctrl+Z` undo · `Ctrl+Y` redo · `Ctrl+S` export · `q` quit.
+
 **Scope**
-- Left click selects the nearest line feature (screen-space distance threshold) or building; highlight the selection.
+- Left click selects a whole feature and highlights it:
+  - For a line feature (road/path): the nearest line within a screen-space distance threshold.
+  - For a building: clicking **anywhere on its extruded box** (any wall, cap, or edge) selects the **entire building**, not the individual face, ring segment, or line under the cursor. The whole box is highlighted as one unit.
 - Click on empty space clears the selection.
 - `Delete` removes the selected feature from the display.
 - `Ctrl+Z` restores the most recently deleted feature (multi-level undo stack).
@@ -79,15 +83,26 @@ Example: `python -m gml_editor ankara_sample.gml --vexag 50`
 - Exported file preserves the original schema, attributes, and CRS.
 
 **Design notes**
-- Selection granularity: whole feature (LineString or MultiLineString), not individual segments. This keeps undo and export simple.
-- Undo stack stores `(feature_id, position)` so restoration is exact.
-- Export copies surviving features through OGR using the source layer definition.
-- Optional: `Ctrl+Y` for redo, if cheap.
+- Selection granularity: always the whole feature — a LineString/MultiLineString in full, or a complete building (all parts/rings and, in the 3D view, every wall and cap of its extruded box). Never a single segment, ring, or face. This keeps undo and export simple.
+- Picking maps the clicked primitive back to its owning feature via the `feature_index` cell array already attached to every mesh in v0.1 (both the line mesh and the extruded-building mesh). A building box contributes many cells but they all carry the same `feature_index`, so any hit resolves to one feature.
+- Highlighting a selected building re-colors/outlines the whole box (all its cells), not just the picked face.
+- Undo stack stores `(feature, position)` so restoration is exact. Implemented in `editing.py` (`EditSession`), with multi-level undo **and** redo.
+- Export: since v0.1 parses GML with the stdlib (no OGR — see v0.1 notes), export round-trips the original XML tree minus the deleted features' elements. Surviving elements are copied verbatim, so schema, attributes, and CRS are preserved exactly. Deleted features are matched by a stable document-order `order` key via the same feature-iterator used at load. Implemented in `export.py`. (When OGR arrives at v0.3+, an OGR-backed export can replace this behind the same function.)
+- `Ctrl+Y` redo: implemented.
 
-**Acceptance criteria**
-- Delete then undo repeatedly returns the exact original state.
-- Exported GML re-opens in QGIS or `ogrinfo` with the correct feature count, attributes, and CRS.
-- Deleting all features and exporting produces a valid empty GML, or a clear message.
+**Acceptance criteria — met**
+- Clicking any face or edge of a building selects and highlights the whole building; `Delete` then removes the entire box (verified by the picking test and before/after renders). Building picks use a VTK cell picker → `feature_index`; thin lines use a screen-space nearest-segment test.
+- Delete then undo repeatedly returns the exact original state (unit-tested, including delete-all-then-undo-all).
+- Exported GML re-opens with the correct feature count, attributes, and CRS; namespace prefixes (`ogr:`, `gml:`) and `srsName` are preserved. *Verified by re-loading the export and by text inspection; not opened in QGIS here.*
+- Deleting all features and exporting produces a valid (well-formed) empty GML.
+- *Caveat:* the live interactive window (mouse/keys) was not exercised in this headless dev environment — all edit operations are plain methods verified off-screen; confirm the live window on a desktop.
+
+**Code added this version**
+- `editing.py` — `EditSession` (selection + undo/redo stack).
+- `export.py` — `export_gml()` / `default_output_path()` (XML round-trip export, refuses to overwrite the input).
+- `viewer.py` — `GmlEditorView` (picking, highlight, rebuild-on-edit, key/mouse wiring); `render_scene` now opens this editor.
+- `model.py` — `Feature.order`; `Scene.tree_root` + `Scene.nsmap`.
+- `tests/test_v02.py` — editing, export round-trip, picking, off-screen edit-loop smoke tests.
 
 ---
 

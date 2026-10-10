@@ -1,7 +1,7 @@
 # 3D Terrain GML Editor
 
-A Windows tool to view (and, in later versions, edit) GML line and polygon data
-in 3D. **Current version: v0.1 — GML display only.** See
+A Windows tool to view and edit GML line and polygon data in 3D.
+**Current version: v0.2 — view + edit (select, delete, undo, export).** See
 [version_plan.md](version_plan.md) for the full roadmap.
 
 ## Requirements
@@ -31,6 +31,16 @@ A 3D window opens with the data auto-fitted to view. Navigate with the mouse:
 - **Mouse wheel** — zoom
 - **Middle drag / Shift+Left drag** — pan
 
+### Editing (v0.2)
+
+- **Left click** — select a feature (a whole road/path line, or an entire
+  building box — clicking any wall/edge selects the whole building). The
+  selection is highlighted; clicking empty space clears it.
+- **Delete** — remove the selected feature.
+- **Ctrl+Z / Ctrl+Y** — undo / redo (multi-level).
+- **Ctrl+S** — export the edited GML to `<input>_edited.gml` (the input file is
+  never overwritten). Survivors keep their original schema, attributes, and CRS.
+
 Feature count, per-layer counts, vertex count, and CRS are logged to the console.
 
 Pass `--screenshot out.png` to render off-screen to a PNG and exit instead of
@@ -57,10 +67,13 @@ Both GML2 (`gml:coordinates`) and GML3 (`gml:posList`/`gml:pos`) are supported.
 
 ```
 python -m tests.test_v01
+python -m tests.test_v02
 ```
 
-Covers loader correctness, error handling (missing / empty / malformed /
-geometry-less files), and off-screen rendering.
+v0.1 covers loader correctness, error handling (missing / empty / malformed /
+geometry-less files), and off-screen rendering. v0.2 covers editing
+(select / delete / undo / redo), GML export round-trip and fidelity, feature
+picking, and an off-screen edit-loop smoke test.
 
 ## Building a standalone executable (.exe)
 
@@ -117,12 +130,15 @@ Notes:
 ```
 gml_editor/
   model.py        Scene and Feature data model
-  gml_loader.py   load_gml(), GMLError
-  viewer.py       mesh building, camera, render_scene
+  gml_loader.py   load_gml(), GMLError, shared feature iterator
+  editing.py      EditSession (selection + undo/redo)
+  export.py       export_gml() (edited-GML round-trip export)
+  viewer.py       mesh building, GmlEditorView (interactive editor), render_scene
   cli.py          command line, logging
   __main__.py     entry point (python -m gml_editor)
 tests/
-  test_v01.py     v0.1 smoke tests
+  test_v01.py     v0.1 smoke tests (load + render)
+  test_v02.py     v0.2 tests (edit, export, picking)
 run_gml_editor.py PyInstaller entry point (see "Building a standalone executable")
 ankara_sample.gml Sample data (Ankara roads + buildings, EPSG:4326)
 version_plan.md   Version roadmap

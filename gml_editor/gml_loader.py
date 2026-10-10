@@ -18,9 +18,10 @@ coordinate encodings are handled.
 
 from __future__ import annotations
 
+import io
 import os
 import xml.etree.ElementTree as ET
-from typing import List, Optional
+from typing import Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 
@@ -34,6 +35,34 @@ class GMLError(Exception):
 # Local tag names we treat as geometry containers.
 _GEOM_TAGS = {"LineString", "MultiLineString", "Polygon", "MultiPolygon"}
 _GEOM_WRAPPER_TAGS = {"geometryProperty", "geometry"} | _GEOM_TAGS
+
+# Elements that wrap feature members.
+_MEMBER_TAGS = {"featureMember", "featureMembers"}
+
+
+def iter_feature_elements(root: ET.Element) -> Iterator[Tuple[ET.Element, ET.Element]]:
+    """Yield ``(member_element, feature_element)`` in document order.
+
+    This is the single traversal shared by loading (to assign each feature a
+    stable ``order``) and export (to map a surviving feature back to its element
+    in the tree). Both must enumerate features identically, so both go through
+    here.
+    """
+    for member in root.iter():
+        if _localname(member.tag) in _MEMBER_TAGS:
+            for feature_elem in list(member):
+                yield member, feature_elem
+
+
+def _parse_namespaces(data: bytes) -> Dict[str, str]:
+    """Extract the prefix -> URI namespace map declared in the document."""
+    nsmap: Dict[str, str] = {}
+    try:
+        for event, (prefix, uri) in ET.iterparse(io.BytesIO(data), events=("start-ns",)):
+            nsmap.setdefault(prefix, uri)
+    except ET.ParseError:
+        pass
+    return nsmap
 
 
 def _localname(tag: str) -> str:
@@ -184,49 +213,52 @@ def load_gml(path: str) -> Scene:
         raise GMLError(f"Not valid XML/GML ({path}): {exc}") from exc
 
     crs = _find_srs(root)
+    nsmap = _parse_namespaces(data)
 
     features: List[Feature] = []
-    auto_id = 0
 
-    # A feature member wraps exactly one feature element. Support both
-    # gml:featureMember (one feature) and gml:featureMembers (many).
-    member_tags = {"featureMember", "featureMembers"}
-    for member in root.iter():
-        if _localname(member.tag) not in member_tags:
-            continue
-        for feature_elem in list(member):
-            geom = None
-            for cand in feature_elem.iter():
-                if _localname(cand.tag) in _GEOM_TAGS:
-                    geom = cand
-                    break
-            if geom is None:
-                continue  # feature with no (supported) geometry
+    # `order` is the document index of every feature element (whether or not it
+    # yields drawable geometry) so it stays aligned with the same traversal used
+    # at export time.
+    for order, (_member, feature_elem) in enumerate(iter_feature_elements(root)):
+        geom = None
+        for cand in feature_elem.iter():
+            if _localname(cand.tag) in _GEOM_TAGS:
+                geom = cand
+                break
+        if geom is None:
+            continue  # feature with no (supported) geometry
 
-            gtype, parts = _extract_parts(geom)
-            if not parts:
-                continue  # geometry present but no line vertices
+        gtype, parts = _extract_parts(geom)
+        if not parts:
+            continue  # geometry present but no line vertices
 
-            attrs = _feature_attributes(feature_elem)
-            fid = attrs.get("fid") or attrs.get("id")
-            if not fid:
-                fid = f"{_localname(feature_elem.tag)}.{auto_id}"
-            auto_id += 1
+        attrs = _feature_attributes(feature_elem)
+        fid = attrs.get("fid") or attrs.get("id")
+        if not fid:
+            fid = f"{_localname(feature_elem.tag)}.{order}"
 
-            features.append(
-                Feature(
-                    fid=str(fid),
-                    layer=_localname(feature_elem.tag),
-                    geom_type=gtype,
-                    parts=parts,
-                    attributes=attrs,
-                    source_ref=feature_elem,
-                )
+        features.append(
+            Feature(
+                fid=str(fid),
+                layer=_localname(feature_elem.tag),
+                geom_type=gtype,
+                parts=parts,
+                attributes=attrs,
+                source_ref=feature_elem,
+                order=order,
             )
+        )
 
     if not features:
         raise GMLError(
             f"No line, multi-line, or polygon-boundary geometry found in {path}"
         )
 
-    return Scene(features=features, crs=crs, source_path=os.path.abspath(path))
+    return Scene(
+        features=features,
+        crs=crs,
+        source_path=os.path.abspath(path),
+        tree_root=root,
+        nsmap=nsmap,
+    )

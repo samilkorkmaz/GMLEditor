@@ -1,6 +1,9 @@
 """Command-line entry point for the GML Editor.
 
-v0.1 usage:  ``python -m gml_editor <path-to-gml>``
+Usage:  ``python -m gml_editor <path-to-gml> [--vexag N] [--screenshot PATH]``
+
+v0.2 opens an interactive editor: left-click to select a feature, Delete to
+remove it, Ctrl+Z / Ctrl+Y to undo / redo, Ctrl+S to export.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ def _configure_logging() -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gml_editor",
-        description="3D Terrain GML Editor (v0.1: GML display only).",
+        description="3D Terrain GML Editor (v0.2: view + edit GML).",
     )
     parser.add_argument("gml", help="Path to a GML file containing line geometry.")
     parser.add_argument(
@@ -106,6 +109,8 @@ def main(argv=None) -> int:
             plotter.close()
             log.info("Wrote screenshot: %s", args.screenshot)
         else:
+            log.info("Controls: left-click select | Delete remove | "
+                     "Ctrl+Z undo | Ctrl+Y redo | Ctrl+S export | q quit")
             render_scene(scene, vexag=args.vexag)
     except Exception as exc:  # pragma: no cover - runtime display issue
         log.error("Rendering failed: %s", exc)

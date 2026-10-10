@@ -33,6 +33,11 @@ class Feature:
     # Reference to the original parsed source (the XML element for the v0.1
     # loader). v0.2 export uses this to round-trip the feature unchanged.
     source_ref: Any = None
+    # Document order among all feature elements (0-based). This is the stable
+    # key v0.2 export uses to map a surviving feature back to its element in the
+    # original tree; it is independent of the feature's position in any live,
+    # edited list.
+    order: int = -1
 
     @property
     def vertex_count(self) -> int:
@@ -46,6 +51,11 @@ class Scene:
     features: List[Feature]
     crs: Optional[str]             # e.g. "EPSG:4326"; None if the source declared none
     source_path: str
+    # Original parsed XML root and its prefix->URI namespace map, kept so v0.2
+    # export can round-trip the document (schema, attributes, CRS) minus any
+    # deleted features. None for scenes not built from a GML file.
+    tree_root: Any = None
+    nsmap: Dict[str, str] = field(default_factory=dict)
 
     @property
     def feature_count(self) -> int:

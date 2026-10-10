@@ -35,6 +35,7 @@ import vtk
 
 from .editing import EditSession
 from .model import Feature, Scene
+from .terrain import densify
 
 log = logging.getLogger("gml_editor.viewer")
 
@@ -99,14 +100,38 @@ def scene_max_height_metres(scene: Scene, features=None) -> float:
     return h
 
 
-def build_line_mesh(scene: Scene, vexag: float = 1.0, features=None):
+def _displayed_line_parts(feats, z_factor: float, terrain=None):
+    """Yield ``(feature_index, (M,3) display points)`` for each line part.
+
+    This is the single source of truth for where a line is *drawn*: flat/scaled
+    z when there is no terrain, or densified + draped onto the surface when there
+    is. Both :func:`build_line_mesh` and the viewer's screen-space picker use it,
+    so the picked geometry always matches the rendered geometry.
+    """
+    for f_index, feature in enumerate(feats):
+        if feature.geom_type in _POLYGON_TYPES:
+            continue
+        for part in feature.parts:
+            if len(part) < 2:
+                continue
+            if terrain is None:
+                block = part.astype(np.float64, copy=True)
+                block[:, 2] = block[:, 2] * z_factor  # scale any line z; 0 -> flat
+            else:
+                block = densify(part, terrain.cell_deg)
+                block[:, 2] = (terrain.elevation_display(block[:, 0], block[:, 1])
+                               + terrain.line_offset_display)
+            yield f_index, block
+
+
+def build_line_mesh(scene: Scene, vexag: float = 1.0, features=None, terrain=None):
     """Combine every *line* feature's polylines into one :class:`pyvista.PolyData`.
 
     ``features`` defaults to ``scene.features`` but may be the live, edited list
-    so the mesh can be rebuilt after deletes/undo. ``feature_index`` cell data
-    indexes into whichever list is passed. Polygon features are handled by
-    :func:`build_building_mesh`. Returns ``(mesh, feature_ids)`` parallel to the
-    mesh cells, or ``(None, [])`` if there are no line features.
+    so the mesh can be rebuilt after deletes/undo. When ``terrain`` is given,
+    lines are densified and draped onto the surface. ``feature_index`` cell data
+    indexes into whichever list is passed. Returns ``(mesh, feature_ids)``
+    parallel to the mesh cells, or ``(None, [])`` if there are no line features.
     """
     feats = scene.features if features is None else features
     point_blocks: List[np.ndarray] = []
@@ -116,20 +141,13 @@ def build_line_mesh(scene: Scene, vexag: float = 1.0, features=None):
 
     z_factor = (vexag / _metres_per_horizontal_unit(scene.crs)) if vexag and vexag > 0 else 0.0
 
-    for f_index, feature in enumerate(feats):
-        if feature.geom_type in _POLYGON_TYPES:
-            continue
-        for part in feature.parts:
-            n = len(part)
-            if n < 2:
-                continue
-            block = part.copy()
-            block[:, 2] = block[:, 2] * z_factor  # scale any line z; 0 -> flat
-            point_blocks.append(block)
-            lines.append(n)
-            lines.extend(range(offset, offset + n))
-            feature_ids.append(f_index)
-            offset += n
+    for f_index, block in _displayed_line_parts(feats, z_factor, terrain):
+        n = len(block)
+        point_blocks.append(block)
+        lines.append(n)
+        lines.extend(range(offset, offset + n))
+        feature_ids.append(f_index)
+        offset += n
 
     if not point_blocks:
         return None, []
@@ -141,11 +159,12 @@ def build_line_mesh(scene: Scene, vexag: float = 1.0, features=None):
     return mesh, feature_ids
 
 
-def _extrude_ring(ring_xyz: np.ndarray, height: float) -> Optional["pv.PolyData"]:
-    """Build a capped prism from a footprint ring extruded from z=0 to ``height``.
+def _extrude_ring(ring_xyz: np.ndarray, height: float, base_z: float = 0.0) -> Optional["pv.PolyData"]:
+    """Build a capped prism from a footprint ring extruded ``base_z`` -> ``base_z+height``.
 
     ``ring_xyz`` is an (N, 3) closed ring (first vertex repeated at the end).
-    Returns a flat filled polygon when ``height <= 0``, or None if degenerate.
+    ``base_z`` sets the ground plane (terrain height when draping). Returns a flat
+    filled polygon when ``height <= 0``, or None if degenerate.
     """
     pts2d = ring_xyz[:, :2]
     if len(pts2d) >= 2 and np.allclose(pts2d[0], pts2d[-1]):
@@ -154,7 +173,7 @@ def _extrude_ring(ring_xyz: np.ndarray, height: float) -> Optional["pv.PolyData"
     if m < 3:
         return None
 
-    base = np.column_stack([pts2d, np.zeros(m)]).astype(np.float64)
+    base = np.column_stack([pts2d, np.full(m, base_z)]).astype(np.float64)
     faces = np.hstack([[m], np.arange(m)]).astype(np.int64)
     poly = pv.PolyData(base, faces=faces)
     if height and height > 0:
@@ -162,12 +181,13 @@ def _extrude_ring(ring_xyz: np.ndarray, height: float) -> Optional["pv.PolyData"
     return poly
 
 
-def build_building_mesh(scene: Scene, vexag: float = 1.0, features=None):
+def build_building_mesh(scene: Scene, vexag: float = 1.0, features=None, terrain=None):
     """Extrude polygon features into one combined solid mesh.
 
-    ``features`` defaults to ``scene.features``; ``feature_index`` cell data
-    indexes into whichever list is passed. Returns ``(mesh, None)``, or
-    ``(None, None)`` if there are no polygon features.
+    ``features`` defaults to ``scene.features``. When ``terrain`` is given, each
+    building's base is set to the terrain height at its footprint centroid so it
+    sits on the surface. ``feature_index`` cell data indexes into whichever list
+    is passed. Returns ``(mesh, None)``, or ``(None, None)`` if no polygons.
     """
     feats = scene.features if features is None else features
     mpu = _metres_per_horizontal_unit(scene.crs)
@@ -178,7 +198,11 @@ def build_building_mesh(scene: Scene, vexag: float = 1.0, features=None):
         height_m = _feature_height_metres(feature)
         height = (height_m / mpu * vexag) if (vexag and vexag > 0) else 0.0
         for ring in feature.parts:
-            prism = _extrude_ring(ring, height)
+            base_z = 0.0
+            if terrain is not None:
+                cen = ring[:, :2].mean(axis=0)
+                base_z = float(terrain.elevation_display(cen[0], cen[1]))
+            prism = _extrude_ring(ring, height, base_z=base_z)
             if prism is None or prism.n_cells == 0:
                 continue
             prism.cell_data["feature_index"] = np.full(prism.n_cells, f_index, dtype=np.int64)
@@ -232,10 +256,12 @@ class GmlEditorView:
         vexag: float = 1.0,
         off_screen: bool = False,
         window_title: str = None,
+        terrain=None,
     ):
         self.scene = scene
         self.vexag = vexag
         self.off_screen = off_screen
+        self.terrain = terrain
         self.session = EditSession(scene)
 
         if not self.session.features:
@@ -244,10 +270,18 @@ class GmlEditorView:
         self._mpu = _metres_per_horizontal_unit(scene.crs)
         self._z_factor = (vexag / self._mpu) if (vexag and vexag > 0) else 0.0
 
-        title = window_title or f"GML Editor v0.2 — {scene.source_path}"
+        title = window_title or f"GML Editor v0.3 — {scene.source_path}"
         self.plotter = pv.Plotter(off_screen=off_screen, title=title)
         self.plotter.set_background(_BACKGROUND)
         self.plotter.add_axes(color=_AXES_LABEL_COLOR)
+
+        # Terrain is static; add it once beneath the (editable) GML actors.
+        if terrain is not None:
+            self.plotter.add_mesh(
+                terrain.build_mesh(), scalars="elevation_m", cmap="gist_earth",
+                show_scalar_bar=False, name="gml_terrain", pickable=False,
+                lighting=True,
+            )
 
         self._line_mesh = None
         self._building_mesh = None
@@ -255,7 +289,10 @@ class GmlEditorView:
         self._building_actor = None
 
         self._rebuild_meshes()
-        has_relief = bool(self._z_factor > 0 and scene_max_height_metres(scene, self.session.features) > 0)
+        has_relief = bool(
+            terrain is not None
+            or (self._z_factor > 0 and scene_max_height_metres(scene, self.session.features) > 0)
+        )
         _configure_camera(self.plotter, has_relief)
 
         if not off_screen:
@@ -269,8 +306,8 @@ class GmlEditorView:
             self.plotter.remove_actor(name)
         feats = self.session.features
 
-        self._line_mesh, _ = build_line_mesh(self.scene, self.vexag, features=feats)
-        self._building_mesh, _ = build_building_mesh(self.scene, self.vexag, features=feats)
+        self._line_mesh, _ = build_line_mesh(self.scene, self.vexag, features=feats, terrain=self.terrain)
+        self._building_mesh, _ = build_building_mesh(self.scene, self.vexag, features=feats, terrain=self.terrain)
         self._line_actor = None
         self._building_actor = None
 
@@ -294,14 +331,14 @@ class GmlEditorView:
         if feature is None:
             return
         if feature.geom_type in _POLYGON_TYPES:
-            mesh, _ = build_building_mesh(self.scene, self.vexag, features=[feature])
+            mesh, _ = build_building_mesh(self.scene, self.vexag, features=[feature], terrain=self.terrain)
             if mesh is not None:
                 self.plotter.add_mesh(
                     mesh, color=_HL_BUILDING_COLOR, show_edges=True,
                     edge_color=_HL_LINE_COLOR, name="gml_hl_bldg", pickable=False,
                 )
         else:
-            mesh, _ = build_line_mesh(self.scene, self.vexag, features=[feature])
+            mesh, _ = build_line_mesh(self.scene, self.vexag, features=[feature], terrain=self.terrain)
             if mesh is not None:
                 self.plotter.add_mesh(
                     mesh, color=_HL_LINE_COLOR, line_width=_HL_LINE_WIDTH,
@@ -350,20 +387,16 @@ class GmlEditorView:
         best = None
         best_d = threshold
         click = (x, y)
-        for feature in self.session.features:
-            if feature.geom_type in _POLYGON_TYPES:
-                continue
-            for part in feature.parts:
-                if len(part) < 2:
-                    continue
-                pts = part.copy()
-                pts[:, 2] = pts[:, 2] * self._z_factor
-                disp = self._world_to_display(pts)
-                for i in range(len(disp) - 1):
-                    d = _point_segment_distance(click, disp[i], disp[i + 1])
-                    if d < best_d:
-                        best_d = d
-                        best = feature
+        feats = self.session.features
+        # Use the exact draped/densified points that were drawn, so picking lines
+        # up with the rendered geometry even at angled views over terrain.
+        for f_index, block in _displayed_line_parts(feats, self._z_factor, self.terrain):
+            disp = self._world_to_display(block)
+            for i in range(len(disp) - 1):
+                d = _point_segment_distance(click, disp[i], disp[i + 1])
+                if d < best_d:
+                    best_d = d
+                    best = feats[f_index]
         return best
 
     def pick_at_display(self, x: float, y: float) -> Optional[Feature]:
@@ -458,14 +491,17 @@ def render_scene(
     off_screen: bool = False,
     window_title: str = None,
     vexag: float = 1.0,
+    terrain=None,
 ):
     """Open the interactive editor on ``scene``.
 
-    With ``off_screen=True`` the view is built but not shown (used for tests and
+    When ``terrain`` is given, the GML is draped onto it. With
+    ``off_screen=True`` the view is built but not shown (used for tests and
     ``--screenshot``). Returns the :class:`pyvista.Plotter` so callers can take a
     screenshot; the :class:`GmlEditorView` is reachable via ``plotter._gml_view``.
     """
-    view = GmlEditorView(scene, vexag=vexag, off_screen=off_screen, window_title=window_title)
+    view = GmlEditorView(scene, vexag=vexag, off_screen=off_screen,
+                         window_title=window_title, terrain=terrain)
     # Stash so --screenshot / tests can reach edit methods if needed.
     view.plotter._gml_view = view
     if not off_screen:

@@ -1,21 +1,51 @@
 """Command-line entry point for the GML Editor.
 
-Usage:  ``python -m gml_editor <path-to-gml> [--vexag N] [--screenshot PATH]``
+Usage:  ``python -m gml_editor <gml> [<dted>] [--vexag N] [--screenshot PATH]``
 
-v0.2 opens an interactive editor: left-click to select a feature, Delete to
-remove it, Ctrl+Z / Ctrl+Y to undo / redo, Ctrl+S to export.
+Opens an interactive editor: left-click to select a feature, Delete to remove
+it, Ctrl+Z / Ctrl+Y to undo / redo, Ctrl+S to export. When a DTED file is also
+given (v0.3), the GML is draped onto the elevation surface.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 from . import __version__
 from .gml_loader import GMLError, load_gml
 
 log = logging.getLogger("gml_editor")
+
+_DTED_EXTS = (".dt0", ".dt1", ".dt2", ".dted")
+_GML_EXTS = (".gml", ".xml")
+
+
+def _looks_like_dted(path: str) -> bool:
+    if path.lower().endswith(_DTED_EXTS):
+        return True
+    if path.lower().endswith(_GML_EXTS):
+        return False
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(16)
+    except OSError:
+        return False
+    # DTED starts with the "UHL" User Header Label; GML/XML starts with '<'.
+    return head[:3] == b"UHL"
+
+
+def _classify_inputs(paths):
+    """Split input paths into (gml_path, dted_path). Raises ValueError on misuse."""
+    gml = [p for p in paths if not _looks_like_dted(p)]
+    dted = [p for p in paths if _looks_like_dted(p)]
+    if len(gml) != 1:
+        raise ValueError("Exactly one GML file is required")
+    if len(dted) > 1:
+        raise ValueError("At most one DTED file is supported")
+    return gml[0], (dted[0] if dted else None)
 
 
 def _configure_logging() -> None:
@@ -28,9 +58,15 @@ def _configure_logging() -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gml_editor",
-        description="3D Terrain GML Editor (v0.2: view + edit GML).",
+        description="3D Terrain GML Editor (v0.3: GML editing + DTED terrain).",
     )
-    parser.add_argument("gml", help="Path to a GML file containing line geometry.")
+    parser.add_argument(
+        "inputs",
+        nargs="+",
+        metavar="FILE",
+        help="A GML file, and optionally a DTED file to drape it onto "
+             "(order-independent; classified by extension/content).",
+    )
     parser.add_argument(
         "--vexag",
         type=float,
@@ -50,6 +86,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Render off-screen to the given PNG and exit instead of opening a "
             "window. Useful on headless machines or for quick previews."
+        ),
+    )
+    parser.add_argument(
+        "--full-terrain",
+        action="store_true",
+        help=(
+            "Show the entire DTED tile. By default the terrain is cropped to the "
+            "GML extent (plus a small margin) so the geometry isn't a speck on a "
+            "full 1-degree tile."
         ),
     )
     parser.add_argument(
@@ -73,7 +118,13 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        scene = load_gml(args.gml)
+        gml_path, dted_path = _classify_inputs(args.inputs)
+    except ValueError as exc:
+        log.error("%s", exc)
+        return 1
+
+    try:
+        scene = load_gml(gml_path)
     except GMLError as exc:
         log.error("%s", exc)
         return 1
@@ -97,21 +148,45 @@ def main(argv=None) -> int:
     # Import the viewer lazily so the summary/error paths don't pay the VTK
     # import cost and so --version etc. work in headless environments.
     try:
-        from .viewer import render_scene
+        from .viewer import _metres_per_horizontal_unit, render_scene
     except Exception as exc:  # pragma: no cover - import environment issue
         log.error("Could not initialize the 3D viewer: %s", exc)
         return 2
 
+    terrain = None
+    if dted_path is not None:
+        try:
+            from .dted import load_dted
+            from .terrain import Terrain
+            grid = load_dted(dted_path)
+        except Exception as exc:
+            log.error("Could not read DTED %s: %s", dted_path, exc)
+            return 1
+        full_dims = (grid.nrow, grid.ncol)
+        bounds = scene.bounds()
+        if not args.full_terrain and bounds is not None:
+            grid = grid.subset(bounds[0], bounds[2], bounds[1], bounds[3])
+        mpu = _metres_per_horizontal_unit(scene.crs)
+        terrain = Terrain(grid, mpu, args.vexag)
+        cropped = "" if args.full_terrain else " (cropped to GML from %dx%d)" % full_dims
+        log.info(
+            "DTED: %s  %dx%d grid%s, extent lon %.4f..%.4f lat %.4f..%.4f, "
+            "elev %.0f..%.0f m, %d voids filled",
+            os.path.basename(dted_path), grid.nrow, grid.ncol, cropped,
+            grid.lon0, grid.lon1, grid.lat0, grid.lat1,
+            grid.zmin, grid.zmax, grid.void_count,
+        )
+
     try:
         if args.screenshot:
-            plotter = render_scene(scene, off_screen=True, vexag=args.vexag)
+            plotter = render_scene(scene, off_screen=True, vexag=args.vexag, terrain=terrain)
             plotter.screenshot(args.screenshot)
             plotter.close()
             log.info("Wrote screenshot: %s", args.screenshot)
         else:
             log.info("Controls: left-click select | Delete remove | "
                      "Ctrl+Z undo | Ctrl+Y redo | Ctrl+S export | q quit")
-            render_scene(scene, vexag=args.vexag)
+            render_scene(scene, vexag=args.vexag, terrain=terrain)
     except Exception as exc:  # pragma: no cover - runtime display issue
         log.error("Rendering failed: %s", exc)
         return 2

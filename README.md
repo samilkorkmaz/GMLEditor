@@ -1,8 +1,8 @@
 # 3D Terrain GML Editor
 
-A Windows tool to view and edit GML line and polygon data in 3D.
-**Current version: v0.2 — view + edit (select, delete, undo, export).** See
-[version_plan.md](version_plan.md) for the full roadmap.
+A Windows tool to view and edit GML line and polygon data in 3D, optionally
+draped over DTED terrain. **Current version: v0.3 — editing + DTED terrain.**
+See [version_plan.md](version_plan.md) for the full roadmap.
 
 ## Requirements
 
@@ -16,14 +16,20 @@ pip install --user pyvista pyvistaqt numpy
 ## Usage
 
 ```
-python -m gml_editor <path-to-gml> [--vexag FACTOR] [--screenshot PATH]
+python -m gml_editor <gml> [<dted>] [--vexag FACTOR] [--screenshot PATH]
 ```
 
-Example:
+Examples:
 
 ```
-python -m gml_editor ankara_sample.gml --vexag 50
+python -m gml_editor ankara_sample.gml --vexag 50                    # GML only
+python -m gml_editor ankara_sample.gml n39_e032_1arc_v3.dt2 --vexag 50  # draped on terrain
 ```
+
+The DTED file is optional and order-independent (classified by extension/content).
+When given, the GML is draped onto the elevation surface. By default the terrain
+is **cropped to the GML extent** (plus a small margin) so the geometry isn't a
+speck on a full 1-degree tile; pass `--full-terrain` to show the whole tile.
 
 A 3D window opens with the data auto-fitted to view. Navigate with the mouse:
 
@@ -48,32 +54,47 @@ opening a window (useful on headless machines or for quick previews).
 
 ### `--vexag` (vertical exaggeration)
 
-Source heights (e.g. building height in metres) are in a different unit than
-lon/lat (degrees), so they are scaled before display:
+Vertical values (terrain elevation and building heights, both in metres) are in
+a different unit than lon/lat (degrees), so they are scaled before display by a
+single factor. **The same factor applies to terrain and building heights
+together**, so the two stay proportional to each other (a 40 m building looks
+correctly tiny next to a 400 m hill); only the vertical axis as a whole is
+stretched relative to the horizontal extent.
 
-- `0` — flat 2D map
-- `1` — true geographic scale (default); small heights look nearly flat
-- `30`–`50` — exaggerate relief so building heights are clearly visible
+- `0` — flat 2D map (no relief)
+- `1` — true geographic scale (default); relief looks nearly flat on a
+  city-scale map
+- `~15` — good for real terrain (e.g. the Ankara DTED tile, ~400 m of relief)
+- `30`–`50` — strong exaggeration; makes small building heights clearly visible
+  when there is no terrain
 
-## What v0.1 renders
+There is a single factor for both; building heights cannot currently be scaled
+independently of the terrain.
+
+## What it renders
 
 - **Lines** (LineString, MultiLineString) as polylines.
-- **Polygons** (buildings) extruded into 3D boxes from the ground up to their
-  height (from the geometry's z, or a `height_m`/`height` attribute).
+- **Polygons** (buildings) extruded into 3D boxes up to their height (from the
+  geometry's z, or a `height_m`/`height` attribute).
+- **DTED terrain** (when a DTED file is given): an elevation surface colored by
+  height, with lines draped onto it and buildings standing on it.
 
 Both GML2 (`gml:coordinates`) and GML3 (`gml:posList`/`gml:pos`) are supported.
+DTED is read with a built-in pure-Python reader (no GDAL); any level loads, and
+large tiles are downsampled to stay interactive.
 
 ## Testing
 
 ```
 python -m tests.test_v01
 python -m tests.test_v02
+python -m tests.test_v03
 ```
 
-v0.1 covers loader correctness, error handling (missing / empty / malformed /
-geometry-less files), and off-screen rendering. v0.2 covers editing
-(select / delete / undo / redo), GML export round-trip and fidelity, feature
-picking, and an off-screen edit-loop smoke test.
+v0.1 covers loading + rendering; v0.2 covers editing (select / delete /
+undo / redo), GML export round-trip and fidelity, and feature picking; v0.3
+covers the DTED reader, terrain draping, picking over terrain, and that editing
+and export still preserve the original coordinates.
 
 ## Building a standalone executable (.exe)
 
@@ -132,13 +153,17 @@ gml_editor/
   gml_loader.py   load_gml(), GMLError, shared feature iterator
   editing.py      EditSession (selection + undo/redo)
   export.py       export_gml() (edited-GML round-trip export)
-  viewer.py       mesh building, GmlEditorView (interactive editor), render_scene
-  cli.py          command line, logging
+  dted.py         load_dted()/write_dted() (pure-Python DTED reader)
+  terrain.py      Terrain (elevation sampler + mesh), densify()
+  viewer.py       mesh building + draping, GmlEditorView, render_scene
+  cli.py          command line, logging, input classification
   __main__.py     entry point (python -m gml_editor)
 tests/
-  test_v01.py     v0.1 smoke tests (load + render)
+  test_v01.py     v0.1 tests (load + render)
   test_v02.py     v0.2 tests (edit, export, picking)
+  test_v03.py     v0.3 tests (DTED, draping, terrain picking)
 run_gml_editor.py PyInstaller entry point (see "Building a standalone executable")
-ankara_sample.gml Sample data (Ankara roads + buildings, EPSG:4326)
+ankara_sample.gml Sample GML (Ankara roads + buildings, EPSG:4326)
+n39_e032_1arc_v3.dt2 Sample DTED tile covering the GML extent
 version_plan.md   Version roadmap
 ```

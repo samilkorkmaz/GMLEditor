@@ -12,7 +12,7 @@
 |---|---|---|
 | v0.1 | GML display only **(DONE)** | `python -m gml_editor <gml> [--vexag N]` |
 | v0.2 | GML editing (select, delete, undo, export) **(DONE)** | `python -m gml_editor <gml> [--vexag N]` |
-| v0.3 | DTED terrain + GML draped | `app dted gml` |
+| v0.3 | DTED terrain + GML draped **(DONE)** | `python -m gml_editor <gml> <dted> [--vexag N]` |
 | v0.4 | GeoTIFF texture | `app dted geotiff gml` |
 | v0.5 | CRS robustness and performance | same |
 | v1.0 | Packaging and release | same |
@@ -106,27 +106,30 @@ Example: `python -m gml_editor ankara_sample.gml --vexag 50`
 
 ---
 
-## v0.3: DTED Terrain
+## v0.3: DTED Terrain — **DONE**
 
 **Goal:** Add the elevation surface and drape the GML on it.
 
-**Scope**
-- Command line becomes: `app <dted> <gml>`.
-- Read DTED Level 1 or Level 2 via GDAL into an elevation grid.
-- Handle DTED void values (-32767) by filling or masking.
-- Build a terrain mesh with a configurable vertical exaggeration.
-- Sample terrain height at each GML vertex (bilinear interpolation) so lines sit on the surface; apply a small vertical offset to avoid z-fighting.
-- Densify long GML segments before draping so lines follow the terrain between vertices.
-- Preserve v0.2 editing: selection, delete, undo, and export now work in 3D.
+**Scope (implemented)**
+- Command line accepts a DTED file alongside the GML (order-independent; files are classified by extension/content). A sample tile `ankara_sample.dt1` is included.
+- Read DTED (any level) into an elevation grid — **with a pure-Python reader, not GDAL** (see decision below).
+- DTED void values (-32767) are detected and filled (with the tile mean).
+- Terrain mesh built as a `StructuredGrid`, colored by elevation, downsampled (stride to <= 400/axis) so large Level-2 tiles stay responsive.
+- Terrain height sampled at each GML vertex by bilinear interpolation; lines get a small vertical offset to avoid z-fighting.
+- Long GML segments are densified (to ~one terrain cell) before draping so lines follow the surface between vertices.
+- v0.2 editing preserved in 3D: selection, delete, undo/redo, and export all still work.
 
-**Acceptance criteria**
-- Both DTED levels load; Level 2 does not freeze the UI.
-- Lines follow terrain contours without visibly cutting through hills.
-- Picking still selects the correct line from angled views.
-- Exported GML is unchanged in coordinates (draping affects display only, unless Z export is chosen deliberately).
+**Decision: no GDAL (pure-Python DTED).** GDAL is still not installable in this environment (see v0.1 notes). DTED is a simple, documented binary format, so it is read directly in `dted.py` (UHL/DSI/ACC headers + per-column records, 16-bit big-endian **sign-magnitude** elevations). This keeps the project installable and matches the pure-language approach. A sample-writer (`write_dted`) generates spec-conformant tiles for tests. GeoTIFF (v0.4) can likewise use a pure-Python reader (`tifffile`/`imagecodecs`) rather than GDAL.
 
-**Risks**
-- Picking in 3D with perspective: fall back to projecting vertices to screen space if the library picker is unreliable for thin lines.
+**Acceptance criteria — met**
+- DTED tiles load; large grids are downsampled so the UI stays responsive (tested with a 900x900 tile → capped mesh). *Real Level-2 (3601²) not run here, but the striding path is exercised.*
+- Lines follow terrain contours (densify + bilinear sample); verified by render and by a draping test (line z matches the sampled surface).
+- Picking still selects the correct line/building from angled views over terrain — line picking projects the **exact draped** geometry, so it stays aligned (tested).
+- Exported GML coordinates are unchanged by draping (draping is display-only; export uses the untouched source tree) — tested by reloading an export and comparing coordinates.
+
+**Enhancement — crop terrain to the GML.** A full 1-degree tile (e.g. the real `n39_e032_1arc_v3.dt2`, 3601x3601) dwarfs a city-block GML (which covers ~11% x 7% of it). By default the DTED is cropped to the GML extent plus a small margin (`DtedGrid.subset()`), so the geometry fills the view; `--full-terrain` shows the whole tile. Verified on the real tile (3601x3601 cropped to 287x457).
+
+**Code added:** `dted.py` (reader + writer + `subset`), `terrain.py` (`Terrain` sampler/mesh + `densify`); `viewer.py` builders take an optional `terrain`; `cli.py` classifies inputs, crops, and builds the terrain; `tests/test_v03.py`.
 
 ---
 

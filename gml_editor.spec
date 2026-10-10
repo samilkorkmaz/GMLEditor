@@ -8,8 +8,22 @@ tmp_ret = collect_all('vtk')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('pyvista')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('pyvistaqt')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
+# NOTE: pyvistaqt/qtpy/PyQt are intentionally NOT collected. The app uses a
+# plain pyvista.Plotter (no Qt backend), so the Qt stack is dead weight (~131 MB).
+
+# Large transitive dependencies that pyvista can pull in but this app never
+# imports at runtime (verified by probing sys.modules after a full render +
+# screenshot). Excluding them cuts the bundle by ~320 MB. matplotlib and PIL
+# are deliberately kept: pyvista uses matplotlib for colormaps/fonts and PIL
+# for screenshots.
+EXCLUDES = [
+    'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'pyvistaqt', 'qtpy',
+    'scipy', 'llvmlite', 'numba', 'pandas', 'lxml',
+    'pydantic', 'pydantic_core',
+    'trame', 'imageio',
+    'IPython', 'jupyter', 'notebook', 'sphinx', 'pytest',
+]
 
 
 a = Analysis(
@@ -21,7 +35,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=EXCLUDES,
     noarchive=False,
     optimize=0,
 )

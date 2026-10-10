@@ -79,41 +79,40 @@ picking, and an off-screen edit-loop smoke test.
 
 You can package the app into a Windows executable that runs **without Python
 installed** on the target machine — PyInstaller bundles the interpreter and all
-dependencies (NumPy, VTK, PyVista).
+dependencies (NumPy, VTK, PyVista, matplotlib, PIL).
 
-Install PyInstaller, then build:
+Install PyInstaller, then build from the committed spec:
 
 ```
 pip install --user pyinstaller
-python -m PyInstaller --noconfirm --onedir --console --name gml_editor ^
-  --collect-all vtk --collect-all pyvista --collect-all pyvistaqt ^
-  run_gml_editor.py
+python -m PyInstaller --noconfirm gml_editor.spec
 ```
 
-This produces `dist\gml_editor\` containing `gml_editor.exe` plus its bundled
-DLLs in `_internal\`. Distribute the **whole folder** (zip it). Run it exactly
-like the Python version — command-line arguments work identically:
+This produces `dist\gml_editor\` (**~380 MB**) containing `gml_editor.exe` plus
+its bundled DLLs in `_internal\`. Distribute the **whole folder** (zip it). Run
+it exactly like the Python version — command-line arguments work identically:
 
 ```
 dist\gml_editor\gml_editor.exe ankara_sample.gml --vexag 50
 dist\gml_editor\gml_editor.exe ankara_sample.gml --screenshot out.png
 ```
 
-After the first build, a `gml_editor.spec` is generated; rebuild with just:
-
-```
-python -m PyInstaller --noconfirm gml_editor.spec
-```
+The spec ([gml_editor.spec](gml_editor.spec)) collects `vtk` and `pyvista`, and
+**excludes ~320 MB of transitive dependencies the app never imports** (PyQt5,
+scipy, llvmlite/numba, pandas, lxml, pydantic, qtpy, …). Without the excludes
+the bundle is ~700 MB. The exclude list was derived empirically by checking
+which modules actually load during a full render; `matplotlib` (colormaps/fonts)
+and `PIL` (screenshots) are kept because they are used.
 
 Notes:
-- `--onedir` (a folder) is recommended over `--onefile`: faster startup and far
-  more reliable with VTK's native libraries. `--onefile` works too but unpacks
+- `--onedir` (a folder, set in the spec) is preferred over `--onefile`: faster
+  startup and far more reliable with VTK's native libraries. `--onefile` unpacks
   to a temp folder on every launch.
-- `--console` keeps the terminal so logging and `--help` are visible (it is a
-  CLI app). `--windowed` would hide them.
-- `--collect-all vtk pyvista pyvistaqt` pulls in data files and dynamically
-  imported submodules that static analysis misses; without them the exe builds
-  but crashes at render time.
+- `console=True` (in the spec) keeps the terminal so logging and `--help` are
+  visible (it is a CLI app).
+- The remaining size is dominated by VTK (~290 MB) and NumPy (~39 MB); shrinking
+  substantially further would mean replacing the VTK rendering stack (e.g. a
+  native GPU renderer), not just trimming dependencies.
 - Build outputs (`dist\`, `build\`, `__pycache__\`) are disposable and need not
   be committed.
 

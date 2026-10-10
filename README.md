@@ -16,7 +16,7 @@ pip install --user pyvista pyvistaqt numpy
 ## Usage
 
 ```
-python -m gml_editor <path-to-gml> [--vexag FACTOR]
+python -m gml_editor <path-to-gml> [--vexag FACTOR] [--screenshot PATH]
 ```
 
 Example:
@@ -32,6 +32,9 @@ A 3D window opens with the data auto-fitted to view. Navigate with the mouse:
 - **Middle drag / Shift+Left drag** — pan
 
 Feature count, per-layer counts, vertex count, and CRS are logged to the console.
+
+Pass `--screenshot out.png` to render off-screen to a PNG and exit instead of
+opening a window (useful on headless machines or for quick previews).
 
 ### `--vexag` (vertical exaggeration)
 
@@ -59,6 +62,48 @@ python -m tests.test_v01
 Covers loader correctness, error handling (missing / empty / malformed /
 geometry-less files), and off-screen rendering.
 
+## Building a standalone executable (.exe)
+
+You can package the app into a Windows executable that runs **without Python
+installed** on the target machine — PyInstaller bundles the interpreter and all
+dependencies (NumPy, VTK, PyVista).
+
+Install PyInstaller, then build:
+
+```
+pip install --user pyinstaller
+python -m PyInstaller --noconfirm --onedir --console --name gml_editor ^
+  --collect-all vtk --collect-all pyvista --collect-all pyvistaqt ^
+  run_gml_editor.py
+```
+
+This produces `dist\gml_editor\` containing `gml_editor.exe` plus its bundled
+DLLs in `_internal\`. Distribute the **whole folder** (zip it). Run it exactly
+like the Python version — command-line arguments work identically:
+
+```
+dist\gml_editor\gml_editor.exe ankara_sample.gml --vexag 50
+dist\gml_editor\gml_editor.exe ankara_sample.gml --screenshot out.png
+```
+
+After the first build, a `gml_editor.spec` is generated; rebuild with just:
+
+```
+python -m PyInstaller --noconfirm gml_editor.spec
+```
+
+Notes:
+- `--onedir` (a folder) is recommended over `--onefile`: faster startup and far
+  more reliable with VTK's native libraries. `--onefile` works too but unpacks
+  to a temp folder on every launch.
+- `--console` keeps the terminal so logging and `--help` are visible (it is a
+  CLI app). `--windowed` would hide them.
+- `--collect-all vtk pyvista pyvistaqt` pulls in data files and dynamically
+  imported submodules that static analysis misses; without them the exe builds
+  but crashes at render time.
+- Build outputs (`dist\`, `build\`, `__pycache__\`) are disposable and need not
+  be committed.
+
 ## Notes
 
 - **No GDAL in v0.1.** GML is parsed with the standard-library XML parser.
@@ -78,6 +123,7 @@ gml_editor/
   __main__.py     entry point (python -m gml_editor)
 tests/
   test_v01.py     v0.1 smoke tests
+run_gml_editor.py PyInstaller entry point (see "Building a standalone executable")
 ankara_sample.gml Sample data (Ankara roads + buildings, EPSG:4326)
 version_plan.md   Version roadmap
 ```

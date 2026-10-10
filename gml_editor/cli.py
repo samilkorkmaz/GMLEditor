@@ -41,6 +41,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--screenshot",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Render off-screen to the given PNG and exit instead of opening a "
+            "window. Useful on headless machines or for quick previews."
+        ),
+    )
+    parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
     )
     return parser
@@ -91,7 +100,13 @@ def main(argv=None) -> int:
         return 2
 
     try:
-        render_scene(scene, vexag=args.vexag)
+        if args.screenshot:
+            plotter = render_scene(scene, off_screen=True, vexag=args.vexag)
+            plotter.screenshot(args.screenshot)
+            plotter.close()
+            log.info("Wrote screenshot: %s", args.screenshot)
+        else:
+            render_scene(scene, vexag=args.vexag)
     except Exception as exc:  # pragma: no cover - runtime display issue
         log.error("Rendering failed: %s", exc)
         return 2

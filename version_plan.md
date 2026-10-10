@@ -13,7 +13,7 @@
 | v0.1 | GML display only **(DONE)** | `python -m gml_editor <gml> [--vexag N]` |
 | v0.2 | GML editing (select, delete, undo, export) **(DONE)** | `python -m gml_editor <gml> [--vexag N]` |
 | v0.3 | DTED terrain + GML draped **(DONE)** | `python -m gml_editor <gml> <dted> [--vexag N]` |
-| v0.4 | GeoTIFF texture | `app dted geotiff gml` |
+| v0.4 | GeoTIFF texture **(DONE)** | `python -m gml_editor <gml> <dted> <geotiff>` |
 | v0.5 | CRS robustness and performance | same |
 | v1.0 | Packaging and release | same |
 
@@ -133,20 +133,31 @@ Example: `python -m gml_editor ankara_sample.gml --vexag 50`
 
 ---
 
-## v0.4: GeoTIFF Texture
+## v0.4: GeoTIFF Texture — **DONE**
 
 **Goal:** Drape imagery over the terrain.
 
-**Scope**
-- Command line becomes: `app <dted> <geotiff> <gml>`.
-- Read GeoTIFF (RGB, grayscale, or single-band with a simple color ramp).
-- Compute texture coordinates from georeferencing so imagery aligns with the terrain.
-- Handle partial overlap between the GeoTIFF and DTED extents (crop or leave untextured regions in a neutral color).
-- Optional toggle to hide or show the texture.
+**Scope (implemented)**
+- Command line accepts a GeoTIFF alongside the GML (and optional DTED); files are classified by extension/content, order-independent. A sample `ankara_sample.tif` (test pattern) is included.
+- Read GeoTIFF **with a pure-Python reader (Pillow), not GDAL** — Pillow decodes the raster, geo tags (ModelPixelScale/ModelTiepoint/ModelTransformation) are read from the TIFF directory. RGB/RGBA used directly, greyscale shown as-is, a single data band gets a viridis ramp.
+- Texture coordinates computed from georeferencing (lon/lat -> u/v) so imagery aligns with the terrain; applied as a VTK texture on the terrain mesh (or a flat plane when there is no DTED).
+- Partial overlap handled: the image is padded with a neutral border and texture coords are clamped, so terrain outside the imagery footprint shows a neutral colour rather than stretched edge pixels.
+- Texture toggle: the `t` key shows/hides the imagery; `--no-texture` starts with it hidden.
+- Large GeoTIFFs are downsampled on load (to <= 2048/axis by default) so memory stays bounded; geographic extent is preserved.
 
-**Acceptance criteria**
-- Imagery aligns with terrain and GML lines to within one pixel at sample test points.
-- Large GeoTIFFs load using overviews or downsampling rather than exhausting memory.
+**Decision: no GDAL (pure-Python GeoTIFF), via Pillow** — already a dependency (used for screenshots), so no new requirement and nothing extra to bundle.
+
+**Acceptance criteria — met**
+- Imagery aligns with terrain/GML: georef is unit-tested (quadrant colours sampled at known lon/lat), texture orientation is guarded (no vertical flip — the inner top-left texel is the source north-west pixel), and verified visually top-down (N=red/S=blue/W-tinted) and over the real terrain.
+- Large GeoTIFFs load via downsampling (tested: 3000x2400 -> capped at 512, extent preserved).
+
+**Code added:** `geotiff.py` (`load_geotiff`/`write_geotiff`, `GeoImage`); `viewer.py` texture helpers (`_build_texture`, `_texture_coords`, `_flat_plane`) + `toggle_texture` and the `t` key; `cli.py` classifies a third input and builds the `GeoImage`; `tests/test_v04.py`.
+
+**Follow-up (triggered by a real Sentinel-2 tile): compressed reader + UTM reprojection.**
+A real Sentinel-2 band (`T36TVK_..._B04_10m.tif`) exposed two gaps: (1) it is DEFLATE-compressed/tiled, which Pillow can't decode, and (2) it is in UTM zone 36N, not lon/lat. Both are now handled:
+- `geotiff.py` reads via **`tifffile` + `imagecodecs`** when available (compression/tiling/BigTIFF), falling back to Pillow for simple files, and detects the CRS from the GeoKeys (geographic vs WGS84/UTM).
+- `reproject.py` adds pure-Python **UTM↔WGS84** (Transverse Mercator, accurate to ~1e-10° in round-trip) and `reproject_to_lonlat()`, which resamples a UTM image onto the lon/lat terrain/GML extent. The CLI reprojects automatically.
+This pulls part of v0.5's CRS work forward. Verified: the real Sentinel-2 tile reads, reprojects from UTM 36N, and drapes aligned over the Ankara terrain. Deps `tifffile`/`imagecodecs` are optional (Pillow fallback) and added to `gml_editor.spec`.
 
 ---
 
@@ -155,7 +166,7 @@ Example: `python -m gml_editor ankara_sample.gml --vexag 50`
 **Goal:** Make it behave on real, messy data.
 
 **Scope**
-- Reproject all three inputs into one working CRS (default: the DTED CRS, normally WGS84; consider a local metric projection for correct proportions).
+- Reproject all three inputs into one working CRS (default: the DTED CRS, normally WGS84; consider a local metric projection for correct proportions). *Partly done in v0.4: UTM GeoTIFF -> lon/lat (`reproject.py`). Remaining: reproject GML/DTED themselves, and non-UTM projected CRSs.*
 - Honor axis order differences (lat/lon vs lon/lat) in GML.
 - Mesh decimation or level of detail for large DTED tiles.
 - Texture size limiting and mipmapping.

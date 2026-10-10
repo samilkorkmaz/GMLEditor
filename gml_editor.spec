@@ -8,6 +8,14 @@ tmp_ret = collect_all('vtk')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('pyvista')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+# GeoTIFF reading (compressed/tiled). imagecodecs ships many binary codec
+# extensions that static analysis misses, so collect it wholesale.
+for _pkg in ('tifffile', 'imagecodecs'):
+    try:
+        tmp_ret = collect_all(_pkg)
+        datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+    except Exception:
+        pass  # optional: the app falls back to Pillow for simple TIFFs
 
 # NOTE: pyvistaqt/qtpy/PyQt are intentionally NOT collected. The app uses a
 # plain pyvista.Plotter (no Qt backend), so the Qt stack is dead weight (~131 MB).

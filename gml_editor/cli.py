@@ -21,31 +21,44 @@ log = logging.getLogger("gml_editor")
 
 _DTED_EXTS = (".dt0", ".dt1", ".dt2", ".dted")
 _GML_EXTS = (".gml", ".xml")
+_TIFF_EXTS = (".tif", ".tiff", ".gtif", ".gtiff")
 
 
-def _looks_like_dted(path: str) -> bool:
-    if path.lower().endswith(_DTED_EXTS):
-        return True
-    if path.lower().endswith(_GML_EXTS):
-        return False
+def _sniff(path: str) -> str:
+    """Classify a file as 'gml', 'dted', or 'geotiff' by extension/content."""
+    low = path.lower()
+    if low.endswith(_DTED_EXTS):
+        return "dted"
+    if low.endswith(_TIFF_EXTS):
+        return "geotiff"
+    if low.endswith(_GML_EXTS):
+        return "gml"
     try:
         with open(path, "rb") as fh:
             head = fh.read(16)
     except OSError:
-        return False
-    # DTED starts with the "UHL" User Header Label; GML/XML starts with '<'.
-    return head[:3] == b"UHL"
+        return "gml"
+    if head[:3] == b"UHL":                       # DTED User Header Label
+        return "dted"
+    if head[:4] in (b"II*\x00", b"MM\x00*"):     # TIFF magic (LE / BE)
+        return "geotiff"
+    return "gml"                                 # GML/XML starts with '<'
 
 
 def _classify_inputs(paths):
-    """Split input paths into (gml_path, dted_path). Raises ValueError on misuse."""
-    gml = [p for p in paths if not _looks_like_dted(p)]
-    dted = [p for p in paths if _looks_like_dted(p)]
-    if len(gml) != 1:
+    """Split paths into (gml, dted, geotiff). Raises ValueError on misuse."""
+    buckets = {"gml": [], "dted": [], "geotiff": []}
+    for p in paths:
+        buckets[_sniff(p)].append(p)
+    if len(buckets["gml"]) != 1:
         raise ValueError("Exactly one GML file is required")
-    if len(dted) > 1:
+    if len(buckets["dted"]) > 1:
         raise ValueError("At most one DTED file is supported")
-    return gml[0], (dted[0] if dted else None)
+    if len(buckets["geotiff"]) > 1:
+        raise ValueError("At most one GeoTIFF file is supported")
+    return (buckets["gml"][0],
+            buckets["dted"][0] if buckets["dted"] else None,
+            buckets["geotiff"][0] if buckets["geotiff"] else None)
 
 
 def _configure_logging() -> None:
@@ -58,14 +71,15 @@ def _configure_logging() -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gml_editor",
-        description="3D Terrain GML Editor (v0.3: GML editing + DTED terrain).",
+        description="3D Terrain GML Editor (v0.4: editing + DTED terrain + GeoTIFF imagery).",
     )
     parser.add_argument(
         "inputs",
         nargs="+",
         metavar="FILE",
-        help="A GML file, and optionally a DTED file to drape it onto "
-             "(order-independent; classified by extension/content).",
+        help="A GML file, and optionally a DTED file (terrain) and/or a GeoTIFF "
+             "file (imagery) to drape it onto. Order-independent; classified by "
+             "extension/content.",
     )
     parser.add_argument(
         "--vexag",
@@ -98,6 +112,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--no-texture",
+        action="store_true",
+        help="Load the GeoTIFF but start with the texture hidden (toggle with 't').",
+    )
+    parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
     )
     return parser
@@ -118,7 +137,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        gml_path, dted_path = _classify_inputs(args.inputs)
+        gml_path, dted_path, geotiff_path = _classify_inputs(args.inputs)
     except ValueError as exc:
         log.error("%s", exc)
         return 1
@@ -177,16 +196,57 @@ def main(argv=None) -> int:
             grid.zmin, grid.zmax, grid.void_count,
         )
 
+    geoimage = None
+    if geotiff_path is not None:
+        try:
+            from .geotiff import GeoTIFFError, load_geotiff
+            geoimage = load_geotiff(geotiff_path)
+        except Exception as exc:
+            log.error("Could not read GeoTIFF %s: %s", geotiff_path, exc)
+            return 1
+        if not geoimage.is_geographic:
+            # Projected imagery (UTM) must be resampled to lon/lat to align with
+            # the GML/DTED. Use the terrain extent (already cropped to the GML)
+            # when available, else the GML bounds with a small margin.
+            if terrain is not None:
+                g = terrain.grid
+                target = (g.lon0, g.lon1, g.lat0, g.lat1)
+            else:
+                b = scene.bounds()
+                mx = (b[1] - b[0]) * 0.05 or 0.001
+                my = (b[3] - b[2]) * 0.05 or 0.001
+                target = (b[0] - mx, b[1] + mx, b[2] - my, b[3] + my)
+            try:
+                from .reproject import reproject_to_lonlat
+                zone = geoimage.utm_zone
+                geoimage = reproject_to_lonlat(geoimage, target)
+                log.info("Reprojected GeoTIFF from UTM zone %d%s to lon/lat (EPSG:4326)",
+                         zone, "N" if geoimage.is_geographic else "")
+            except Exception as exc:
+                log.error("Could not reproject GeoTIFF: %s", exc)
+                return 1
+        w, e, s, n = geoimage.extent
+        log.info(
+            "GeoTIFF: %s  %dx%d px, extent lon %.4f..%.4f lat %.4f..%.4f",
+            os.path.basename(geotiff_path), geoimage.height, geoimage.width, w, e, s, n,
+        )
+
+    texture_on = not args.no_texture
     try:
         if args.screenshot:
-            plotter = render_scene(scene, off_screen=True, vexag=args.vexag, terrain=terrain)
+            plotter = render_scene(scene, off_screen=True, vexag=args.vexag,
+                                   terrain=terrain, geoimage=geoimage, texture_on=texture_on)
             plotter.screenshot(args.screenshot)
             plotter.close()
             log.info("Wrote screenshot: %s", args.screenshot)
         else:
-            log.info("Controls: left-click select | Delete remove | "
-                     "Ctrl+Z undo | Ctrl+Y redo | Ctrl+S export | q quit")
-            render_scene(scene, vexag=args.vexag, terrain=terrain)
+            controls = ("Controls: left-click select | Delete remove | "
+                        "Ctrl+Z undo | Ctrl+Y redo | Ctrl+S export | q quit")
+            if geoimage is not None:
+                controls += " | t texture"
+            log.info(controls)
+            render_scene(scene, vexag=args.vexag, terrain=terrain,
+                         geoimage=geoimage, texture_on=texture_on)
     except Exception as exc:  # pragma: no cover - runtime display issue
         log.error("Rendering failed: %s", exc)
         return 2

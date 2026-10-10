@@ -53,6 +53,10 @@ _HL_LINE_WIDTH = 5
 _HL_BUILDING_COLOR = "#ffd24d"
 _PICK_THRESHOLD_PX = 12.0
 
+# Neutral fill shown where a GeoTIFF does not cover the terrain.
+_NEUTRAL_RGB = (58, 62, 68)
+_NO_TEXTURE_TERRAIN = "#6b7a5e"
+
 # Approximate length of one degree of latitude, in metres.
 _METRES_PER_DEGREE = 111_320.0
 
@@ -217,6 +221,48 @@ def build_building_mesh(scene: Scene, vexag: float = 1.0, features=None, terrain
     return combined, None
 
 
+def _build_texture(geoimage, pad_px: int = 2):
+    """Return ``(pv.Texture, (west, east, south, north))`` for a GeoImage.
+
+    The image is padded with a neutral border so terrain outside the imagery's
+    footprint samples a neutral colour rather than stretched edge pixels (the
+    partial-overlap case). Texture coordinates are later clamped to [0, 1], so
+    anything beyond the padded extent also resolves to the neutral border.
+    """
+    rgb = geoimage.rgb
+    h, w = rgb.shape[:2]
+    padded = np.empty((h + 2 * pad_px, w + 2 * pad_px, 3), dtype=np.uint8)
+    padded[:] = _NEUTRAL_RGB
+    padded[pad_px:pad_px + h, pad_px:pad_px + w] = rgb
+    west = geoimage.west - pad_px * geoimage.dx
+    north = geoimage.north + pad_px * geoimage.dy
+    east = geoimage.east + pad_px * geoimage.dx
+    south = geoimage.south - pad_px * geoimage.dy
+    # VTK maps texture coordinate v=1 to array row 0, and our v = (lat-south)/
+    # (north-south) sends north -> v=1. Image row 0 is already the north edge,
+    # so no vertical flip is needed for north to land on row 0.
+    tex = pv.Texture(np.ascontiguousarray(padded))
+    return tex, (west, east, south, north)
+
+
+def _texture_coords(points: np.ndarray, extent) -> np.ndarray:
+    """Per-point (u, v) from lon/lat into a (west, east, south, north) box, clamped."""
+    west, east, south, north = extent
+    u = (points[:, 0] - west) / (east - west)
+    v = (points[:, 1] - south) / (north - south)
+    uv = np.column_stack([u, v])
+    return np.clip(uv, 0.0, 1.0)
+
+
+def _flat_plane(extent, z: float = 0.0) -> "pv.StructuredGrid":
+    """A flat quad covering (west, east, south, north) at height ``z``."""
+    west, east, south, north = extent
+    xs = np.array([west, east], dtype=np.float64)
+    ys = np.array([south, north], dtype=np.float64)
+    X, Y = np.meshgrid(xs, ys)
+    return pv.StructuredGrid(X, Y, np.full_like(X, z))
+
+
 def _configure_camera(plotter: "pv.Plotter", has_relief: bool) -> None:
     """Fit the data; tilt to isometric when there is relief, else look straight down."""
     if has_relief:
@@ -257,11 +303,14 @@ class GmlEditorView:
         off_screen: bool = False,
         window_title: str = None,
         terrain=None,
+        geoimage=None,
+        texture_on: bool = True,
     ):
         self.scene = scene
         self.vexag = vexag
         self.off_screen = off_screen
         self.terrain = terrain
+        self.geoimage = geoimage
         self.session = EditSession(scene)
 
         if not self.session.features:
@@ -270,18 +319,27 @@ class GmlEditorView:
         self._mpu = _metres_per_horizontal_unit(scene.crs)
         self._z_factor = (vexag / self._mpu) if (vexag and vexag > 0) else 0.0
 
-        title = window_title or f"GML Editor v0.3 — {scene.source_path}"
+        title = window_title or f"GML Editor v0.4 — {scene.source_path}"
         self.plotter = pv.Plotter(off_screen=off_screen, title=title)
         self.plotter.set_background(_BACKGROUND)
         self.plotter.add_axes(color=_AXES_LABEL_COLOR)
 
-        # Terrain is static; add it once beneath the (editable) GML actors.
+        # Build the static ground surface once: the DTED terrain if present,
+        # else a flat plane only when there is imagery to drape on it.
+        self._ground_mesh = None
+        self._texture = None
+        self._has_elevation = False
+        self._textured = bool(geoimage is not None and texture_on)
         if terrain is not None:
-            self.plotter.add_mesh(
-                terrain.build_mesh(), scalars="elevation_m", cmap="gist_earth",
-                show_scalar_bar=False, name="gml_terrain", pickable=False,
-                lighting=True,
-            )
+            self._ground_mesh = terrain.build_mesh()
+            self._has_elevation = True
+        elif geoimage is not None:
+            self._ground_mesh = _flat_plane(geoimage.extent, z=0.0)
+        if geoimage is not None and self._ground_mesh is not None:
+            self._texture, tex_extent = _build_texture(geoimage)
+            self._ground_mesh.active_texture_coordinates = _texture_coords(
+                self._ground_mesh.points, tex_extent)
+        self._add_ground_actor()
 
         self._line_mesh = None
         self._building_mesh = None
@@ -297,6 +355,39 @@ class GmlEditorView:
 
         if not off_screen:
             self._wire_events()
+
+    # -- ground surface (terrain / textured plane) -------------------------
+
+    def _add_ground_actor(self) -> None:
+        """(Re)add the ground actor, textured or plain per ``self._textured``."""
+        if self._ground_mesh is None:
+            return
+        self.plotter.remove_actor("gml_terrain")
+        if self._textured and self._texture is not None:
+            self.plotter.add_mesh(
+                self._ground_mesh, texture=self._texture, name="gml_terrain",
+                pickable=False, lighting=True,
+            )
+        elif self._has_elevation:
+            self.plotter.add_mesh(
+                self._ground_mesh, scalars="elevation_m", cmap="gist_earth",
+                show_scalar_bar=False, name="gml_terrain", pickable=False,
+                lighting=True,
+            )
+        else:
+            self.plotter.add_mesh(
+                self._ground_mesh, color=_NO_TEXTURE_TERRAIN, name="gml_terrain",
+                pickable=False, lighting=True,
+            )
+
+    def toggle_texture(self) -> None:
+        """Show/hide the GeoTIFF imagery on the ground surface."""
+        if self._texture is None:
+            return
+        self._textured = not self._textured
+        self._add_ground_actor()
+        log.info("Texture %s", "on" if self._textured else "off")
+        self._render()
 
     # -- mesh construction -------------------------------------------------
 
@@ -478,6 +569,8 @@ class GmlEditorView:
                 self.redo()
             elif ctrl and sym == "s":
                 self.export()
+            elif sym == "t":
+                self.toggle_texture()
 
         interactor.AddObserver("LeftButtonPressEvent", on_left_press, 1.0)
         interactor.AddObserver("KeyPressEvent", on_key, 1.0)
@@ -492,16 +585,20 @@ def render_scene(
     window_title: str = None,
     vexag: float = 1.0,
     terrain=None,
+    geoimage=None,
+    texture_on: bool = True,
 ):
     """Open the interactive editor on ``scene``.
 
-    When ``terrain`` is given, the GML is draped onto it. With
+    When ``terrain`` is given, the GML is draped onto it; when ``geoimage`` is
+    given, it is draped as a texture over the terrain (or a flat plane). With
     ``off_screen=True`` the view is built but not shown (used for tests and
-    ``--screenshot``). Returns the :class:`pyvista.Plotter` so callers can take a
-    screenshot; the :class:`GmlEditorView` is reachable via ``plotter._gml_view``.
+    ``--screenshot``). Returns the :class:`pyvista.Plotter`; the
+    :class:`GmlEditorView` is reachable via ``plotter._gml_view``.
     """
     view = GmlEditorView(scene, vexag=vexag, off_screen=off_screen,
-                         window_title=window_title, terrain=terrain)
+                         window_title=window_title, terrain=terrain,
+                         geoimage=geoimage, texture_on=texture_on)
     # Stash so --screenshot / tests can reach edit methods if needed.
     view.plotter._gml_view = view
     if not off_screen:

@@ -1,8 +1,9 @@
 # 3D Terrain GML Editor
 
 A Windows tool to view and edit GML line and polygon data in 3D, optionally
-draped over DTED terrain. **Current version: v0.3 — editing + DTED terrain.**
-See [version_plan.md](version_plan.md) for the full roadmap.
+draped over DTED terrain and GeoTIFF imagery. **Current version: v0.4 —
+editing + DTED terrain + GeoTIFF texture.** See [version_plan.md](version_plan.md)
+for the full roadmap.
 
 DTED can be downloaded from: https://earthexplorer.usgs.gov/
 
@@ -11,29 +12,36 @@ GeoTIFF can be downloaded from: https://geodataviewer.com/tools/satellite-downlo
 ## Requirements
 
 - Python 3.10+
-- `numpy`, `pyvista`, `pyvistaqt` (VTK is pulled in by PyVista)
+- `numpy`, `pyvista` (VTK is pulled in by PyVista), `Pillow`
+- Optional: `tifffile` + `imagecodecs` — for compressed/tiled GeoTIFFs
+  (e.g. Sentinel-2 / GDAL output). Without them, only simple uncompressed
+  GeoTIFFs load (via Pillow).
 
 ```
-pip install --user pyvista pyvistaqt numpy
+pip install --user pyvista numpy Pillow
+pip install --user tifffile imagecodecs      # for real-world GeoTIFFs
 ```
 
 ## Usage
 
 ```
-python -m gml_editor <gml> [<dted>] [--vexag FACTOR] [--screenshot PATH]
+python -m gml_editor <gml> [<dted>] [<geotiff>] [--vexag FACTOR] [--screenshot PATH]
 ```
 
 Examples:
 
 ```
-python -m gml_editor ankara_sample.gml --vexag 50                    # GML only
-python -m gml_editor ankara_sample.gml n39_e032_1arc_v3.dt2 --vexag 50  # draped on terrain
+python -m gml_editor ankara_sample.gml --vexag 50                               # GML only
+python -m gml_editor ankara_sample.gml n39_e032_1arc_v3.dt2 --vexag 15          # draped on terrain
+python -m gml_editor ankara_sample.gml n39_e032_1arc_v3.dt2 ankara_sample.tif --vexag 15  # + imagery
 ```
 
-The DTED file is optional and order-independent (classified by extension/content).
-When given, the GML is draped onto the elevation surface. By default the terrain
-is **cropped to the GML extent** (plus a small margin) so the geometry isn't a
+The DTED and GeoTIFF files are optional and order-independent (classified by
+extension/content). The DTED provides the elevation surface the GML is draped
+onto; the GeoTIFF is draped over it as imagery. By default the terrain is
+**cropped to the GML extent** (plus a small margin) so the geometry isn't a
 speck on a full 1-degree tile; pass `--full-terrain` to show the whole tile.
+Pass `--no-texture` to start with the imagery hidden.
 
 A 3D window opens with the data auto-fitted to view. Navigate with the mouse:
 
@@ -50,6 +58,7 @@ A 3D window opens with the data auto-fitted to view. Navigate with the mouse:
 - **Ctrl+Z / Ctrl+Y** — undo / redo (multi-level).
 - **Ctrl+S** — export the edited GML to `<input>_edited.gml` (the input file is
   never overwritten). Survivors keep their original schema, attributes, and CRS.
+- **t** — toggle the GeoTIFF imagery on/off (when a GeoTIFF is loaded).
 
 Feature count, per-layer counts, vertex count, and CRS are logged to the console.
 
@@ -82,10 +91,18 @@ independently of the terrain.
   geometry's z, or a `height_m`/`height` attribute).
 - **DTED terrain** (when a DTED file is given): an elevation surface colored by
   height, with lines draped onto it and buildings standing on it.
+- **GeoTIFF imagery** (when a GeoTIFF is given): draped as a texture over the
+  terrain (or a flat plane), aligned by georeferencing; terrain outside the
+  imagery footprint is shown in a neutral colour. Toggle with `t`. A GeoTIFF in
+  **UTM** (e.g. Sentinel-2) is reprojected to lon/lat on load to align with the
+  GML/DTED.
 
 Both GML2 (`gml:coordinates`) and GML3 (`gml:posList`/`gml:pos`) are supported.
-DTED is read with a built-in pure-Python reader (no GDAL); any level loads, and
-large tiles are downsampled to stay interactive.
+DTED and GeoTIFF are read with built-in pure-Python readers (no GDAL): DTED via
+a small binary parser; GeoTIFF via `tifffile`/`imagecodecs` when installed
+(handles compression/tiling) or Pillow for simple files. UTM↔WGS84 reprojection
+is a pure-Python Transverse Mercator implementation (`reproject.py`). Large DTED
+tiles and GeoTIFFs are downsampled to stay interactive.
 
 ## Testing
 
@@ -93,12 +110,15 @@ large tiles are downsampled to stay interactive.
 python -m tests.test_v01
 python -m tests.test_v02
 python -m tests.test_v03
+python -m tests.test_v04
 ```
 
 v0.1 covers loading + rendering; v0.2 covers editing (select / delete /
 undo / redo), GML export round-trip and fidelity, and feature picking; v0.3
 covers the DTED reader, terrain draping, picking over terrain, and that editing
-and export still preserve the original coordinates.
+and export still preserve the original coordinates; v0.4 covers the GeoTIFF
+reader, georeferencing/alignment, texture orientation, partial overlap, and a
+textured render.
 
 ## Building a standalone executable (.exe)
 
@@ -143,11 +163,14 @@ Notes:
 
 ## Notes
 
-- **No GDAL in v0.1.** GML is parsed with the standard-library XML parser.
-  GDAL/OGR will be introduced at v0.3 (DTED terrain) and v0.4 (GeoTIFF), which
-  need the native GDAL library (install via OSGeo4W or conda at that point).
-- CRS reprojection and longitude-aspect correction are deferred to v0.5; v0.1
-  reads and stores the GML's own CRS but does not reproject.
+- **No GDAL.** All formats are read with pure-Python code: GML via the stdlib
+  XML parser, DTED via a small binary parser (`dted.py`), GeoTIFF via Pillow
+  (`geotiff.py`). This keeps the app installable and the bundle lean, at the cost
+  of supporting only the common cases (north-up GeoTIFFs, standard DTED levels).
+- CRS: GML and DTED are assumed to be geographic (lon/lat); a **UTM** GeoTIFF is
+  reprojected to lon/lat to match (pure-Python, WGS84 UTM only). Other projected
+  CRSs, reprojecting the GML/DTED themselves, and longitude-aspect correction are
+  deferred to v0.5.
 
 ## Project layout
 
@@ -158,16 +181,20 @@ gml_editor/
   editing.py      EditSession (selection + undo/redo)
   export.py       export_gml() (edited-GML round-trip export)
   dted.py         load_dted()/write_dted() (pure-Python DTED reader)
+  geotiff.py      load_geotiff() (tifffile/Pillow GeoTIFF reader, CRS detect)
+  reproject.py    pure-Python UTM<->WGS84 + reproject_to_lonlat()
   terrain.py      Terrain (elevation sampler + mesh), densify()
-  viewer.py       mesh building + draping, GmlEditorView, render_scene
+  viewer.py       mesh building + draping + texturing, GmlEditorView, render_scene
   cli.py          command line, logging, input classification
   __main__.py     entry point (python -m gml_editor)
 tests/
   test_v01.py     v0.1 tests (load + render)
   test_v02.py     v0.2 tests (edit, export, picking)
   test_v03.py     v0.3 tests (DTED, draping, terrain picking)
+  test_v04.py     v0.4 tests (GeoTIFF, alignment, texturing)
 run_gml_editor.py PyInstaller entry point (see "Building a standalone executable")
 ankara_sample.gml Sample GML (Ankara roads + buildings, EPSG:4326)
 n39_e032_1arc_v3.dt2 Sample DTED tile covering the GML extent
+ankara_sample.tif Sample GeoTIFF (synthetic test pattern over the GML extent)
 version_plan.md   Version roadmap
 ```

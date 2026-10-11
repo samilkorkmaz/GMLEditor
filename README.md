@@ -111,6 +111,7 @@ python -m tests.test_v01
 python -m tests.test_v02
 python -m tests.test_v03
 python -m tests.test_v04
+python -m tests.test_v05
 ```
 
 v0.1 covers loading + rendering; v0.2 covers editing (select / delete /
@@ -118,7 +119,8 @@ undo / redo), GML export round-trip and fidelity, and feature picking; v0.3
 covers the DTED reader, terrain draping, picking over terrain, and that editing
 and export still preserve the original coordinates; v0.4 covers the GeoTIFF
 reader, georeferencing/alignment, texture orientation, partial overlap, and a
-textured render.
+textured render; v0.5 covers CRS reprojection + axis order, mixed-CRS alignment,
+extent-overlap errors, and the longitude-aspect proportion correction.
 
 ## Building a standalone executable (.exe)
 
@@ -167,10 +169,17 @@ Notes:
   XML parser, DTED via a small binary parser (`dted.py`), GeoTIFF via Pillow
   (`geotiff.py`). This keeps the app installable and the bundle lean, at the cost
   of supporting only the common cases (north-up GeoTIFFs, standard DTED levels).
-- CRS: GML and DTED are assumed to be geographic (lon/lat); a **UTM** GeoTIFF is
-  reprojected to lon/lat to match (pure-Python, WGS84 UTM only). Other projected
-  CRSs, reprojecting the GML/DTED themselves, and longitude-aspect correction are
-  deferred to v0.5.
+- **CRS (v0.5).** Everything is brought into one working CRS (WGS84 lon/lat):
+  GML is reprojected on load from its `srsName` (UTM → lon/lat, with axis-order
+  handling), and UTM GeoTIFFs are reprojected too. DTED is already lon/lat.
+  Use `--gml-crs EPSG:xxxx` / `--swap-xy` to override detection. Only geographic
+  and WGS84/UTM are supported — other projected CRSs raise a clear error.
+- **Proportions (v0.5).** East-west is scaled by cos(latitude) so shapes aren't
+  stretched (one degree of longitude is shorter than one of latitude). A full
+  local *metric* projection is left for future work.
+- **Performance (v0.5).** DTED meshes and GeoTIFFs are downsampled
+  (`--max-terrain-dim`, `--max-texture-dim`) and imagery is mipmapped; load
+  progress is logged. Non-overlapping DTED/GeoTIFF vs the GML is a clear error.
 
 ## Project layout
 
@@ -192,6 +201,7 @@ tests/
   test_v02.py     v0.2 tests (edit, export, picking)
   test_v03.py     v0.3 tests (DTED, draping, terrain picking)
   test_v04.py     v0.4 tests (GeoTIFF, alignment, texturing)
+  test_v05.py     v0.5 tests (CRS reprojection, axis order, overlap, proportions)
 run_gml_editor.py PyInstaller entry point (see "Building a standalone executable")
 ankara_sample.gml Sample GML (Ankara roads + buildings, EPSG:4326)
 n39_e032_1arc_v3.dt2 Sample DTED tile covering the GML extent

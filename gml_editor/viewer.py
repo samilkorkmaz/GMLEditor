@@ -17,8 +17,8 @@ exaggeration factor:
 
 ``vexag = 0`` flattens everything (buildings collapse to their footprint);
 ``vexag = 1`` is true geographic scale; ``vexag > 1`` exaggerates relief so
-small heights are visible. Real CRS reprojection is deferred to v0.5; this is a
-lightweight metres->degrees approximation.
+small heights are visible. x is scaled by cos(latitude) at the actor level
+(v0.5) so east-west proportions are correct while mesh coordinates stay lon/lat.
 
 Per-feature cell-id mapping is attached to every mesh (``feature_index`` cell
 data) so v0.2 can resolve a clicked cell back to its feature.
@@ -27,6 +27,7 @@ data) so v0.2 can resolve a clicked cell back to its feature.
 from __future__ import annotations
 
 import logging
+import math
 from typing import List, Optional
 
 import numpy as np
@@ -143,7 +144,7 @@ def build_line_mesh(scene: Scene, vexag: float = 1.0, features=None, terrain=Non
     feature_ids: List[int] = []
     offset = 0
 
-    z_factor = (vexag / _metres_per_horizontal_unit(scene.crs)) if vexag and vexag > 0 else 0.0
+    z_factor = (vexag / _metres_per_horizontal_unit(scene.working_crs)) if vexag and vexag > 0 else 0.0
 
     for f_index, block in _displayed_line_parts(feats, z_factor, terrain):
         n = len(block)
@@ -194,7 +195,7 @@ def build_building_mesh(scene: Scene, vexag: float = 1.0, features=None, terrain
     is passed. Returns ``(mesh, None)``, or ``(None, None)`` if no polygons.
     """
     feats = scene.features if features is None else features
-    mpu = _metres_per_horizontal_unit(scene.crs)
+    mpu = _metres_per_horizontal_unit(scene.working_crs)
     blocks = []
     for f_index, feature in enumerate(feats):
         if feature.geom_type not in _POLYGON_TYPES:
@@ -242,6 +243,13 @@ def _build_texture(geoimage, pad_px: int = 2):
     # (north-south) sends north -> v=1. Image row 0 is already the north edge,
     # so no vertical flip is needed for north to land on row 0.
     tex = pv.Texture(np.ascontiguousarray(padded))
+    # Mipmapping + interpolation keep imagery smooth when zoomed out / sharp when
+    # zoomed in (v0.5 performance/quality).
+    try:
+        tex.mipmap = True
+        tex.interpolate = True
+    except Exception:
+        pass
     return tex, (west, east, south, north)
 
 
@@ -316,10 +324,21 @@ class GmlEditorView:
         if not self.session.features:
             raise ValueError("Scene has no features to edit")
 
-        self._mpu = _metres_per_horizontal_unit(scene.crs)
+        self._mpu = _metres_per_horizontal_unit(scene.working_crs)
         self._z_factor = (vexag / self._mpu) if (vexag and vexag > 0) else 0.0
 
-        title = window_title or f"GML Editor v0.4 — {scene.source_path}"
+        # Longitude-aspect correction (v0.5): one degree of longitude is shorter
+        # than one of latitude by cos(latitude). Scaling x by that factor (as an
+        # actor transform, so mesh coordinates stay true lon/lat) gives correct
+        # east-west proportions. The same factor is applied to picking.
+        if terrain is not None:
+            lat0 = 0.5 * (terrain.grid.lat0 + terrain.grid.lat1)
+        else:
+            b = scene.bounds()
+            lat0 = 0.5 * (b[2] + b[3]) if b is not None else 0.0
+        self._kx = math.cos(math.radians(lat0)) or 1.0
+
+        title = window_title or f"GML Editor v0.5 — {scene.source_path}"
         self.plotter = pv.Plotter(off_screen=off_screen, title=title)
         self.plotter.set_background(_BACKGROUND)
         self.plotter.add_axes(color=_AXES_LABEL_COLOR)
@@ -356,6 +375,15 @@ class GmlEditorView:
         if not off_screen:
             self._wire_events()
 
+    def _add_mesh(self, mesh, **kwargs):
+        """add_mesh, then apply the longitude-aspect scale to the actor."""
+        actor = self.plotter.add_mesh(mesh, **kwargs)
+        try:
+            actor.scale = (self._kx, 1.0, 1.0)
+        except Exception:  # pragma: no cover - older pyvista
+            actor.SetScale(self._kx, 1.0, 1.0)
+        return actor
+
     # -- ground surface (terrain / textured plane) -------------------------
 
     def _add_ground_actor(self) -> None:
@@ -364,18 +392,18 @@ class GmlEditorView:
             return
         self.plotter.remove_actor("gml_terrain")
         if self._textured and self._texture is not None:
-            self.plotter.add_mesh(
+            self._add_mesh(
                 self._ground_mesh, texture=self._texture, name="gml_terrain",
                 pickable=False, lighting=True,
             )
         elif self._has_elevation:
-            self.plotter.add_mesh(
+            self._add_mesh(
                 self._ground_mesh, scalars="elevation_m", cmap="gist_earth",
                 show_scalar_bar=False, name="gml_terrain", pickable=False,
                 lighting=True,
             )
         else:
-            self.plotter.add_mesh(
+            self._add_mesh(
                 self._ground_mesh, color=_NO_TEXTURE_TERRAIN, name="gml_terrain",
                 pickable=False, lighting=True,
             )
@@ -403,12 +431,12 @@ class GmlEditorView:
         self._building_actor = None
 
         if self._line_mesh is not None:
-            self._line_actor = self.plotter.add_mesh(
+            self._line_actor = self._add_mesh(
                 self._line_mesh, color=_LINE_COLOR, line_width=_LINE_WIDTH,
                 name="gml_lines", pickable=True,
             )
         if self._building_mesh is not None:
-            self._building_actor = self.plotter.add_mesh(
+            self._building_actor = self._add_mesh(
                 self._building_mesh, color=_BUILDING_COLOR, show_edges=True,
                 edge_color=_BUILDING_EDGE, name="gml_buildings", pickable=True,
             )
@@ -424,14 +452,14 @@ class GmlEditorView:
         if feature.geom_type in _POLYGON_TYPES:
             mesh, _ = build_building_mesh(self.scene, self.vexag, features=[feature], terrain=self.terrain)
             if mesh is not None:
-                self.plotter.add_mesh(
+                self._add_mesh(
                     mesh, color=_HL_BUILDING_COLOR, show_edges=True,
                     edge_color=_HL_LINE_COLOR, name="gml_hl_bldg", pickable=False,
                 )
         else:
             mesh, _ = build_line_mesh(self.scene, self.vexag, features=[feature], terrain=self.terrain)
             if mesh is not None:
-                self.plotter.add_mesh(
+                self._add_mesh(
                     mesh, color=_HL_LINE_COLOR, line_width=_HL_LINE_WIDTH,
                     name="gml_hl_line", pickable=False,
                 )
@@ -443,10 +471,12 @@ class GmlEditorView:
     # -- picking -----------------------------------------------------------
 
     def _world_to_display(self, pts: np.ndarray) -> np.ndarray:
+        # Actors are scaled by kx in x, so a mesh vertex at lon is at world x =
+        # lon * kx. Apply the same here so picking matches the rendered geometry.
         ren = self.plotter.renderer
         out = np.empty((len(pts), 2), dtype=np.float64)
         for i, p in enumerate(pts):
-            ren.SetWorldPoint(float(p[0]), float(p[1]), float(p[2]), 1.0)
+            ren.SetWorldPoint(float(p[0]) * self._kx, float(p[1]), float(p[2]), 1.0)
             ren.WorldToDisplay()
             d = ren.GetDisplayPoint()
             out[i, 0] = d[0]

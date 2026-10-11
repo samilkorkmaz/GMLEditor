@@ -56,6 +56,10 @@ class Scene:
     # deleted features. None for scenes not built from a GML file.
     tree_root: Any = None
     nsmap: Dict[str, str] = field(default_factory=dict)
+    # v0.5: the CRS features were reprojected into for display, and the source
+    # EPSG they came from (None if undeclared / assumed lon/lat).
+    working_crs: str = "EPSG:4326"
+    source_epsg: Optional[int] = None
 
     @property
     def feature_count(self) -> int:

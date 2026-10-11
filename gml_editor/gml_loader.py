@@ -189,11 +189,41 @@ def _feature_attributes(feature_elem: ET.Element) -> dict:
     return attrs
 
 
-def load_gml(path: str) -> Scene:
+def _reproject_features(features, crs, src_crs=None, swap_xy=None):
+    """Reproject every feature's vertices to WGS84 lon/lat in place.
+
+    CRS and axis order come from the GML ``srsName`` (``crs``), overridable by
+    ``src_crs`` (e.g. "EPSG:32636") and ``swap_xy`` (force/suppress lat,lon swap).
+    Returns the EPSG that was applied. Raises :class:`GMLError` on unsupported CRS.
+    """
+    from .reproject import CRSError, parse_srs, to_wgs84_lonlat
+
+    epsg, swap = parse_srs(src_crs if src_crs is not None else crs)
+    if swap_xy is not None:
+        swap = swap_xy
+    try:
+        for feature in features:
+            for part in feature.parts:
+                if swap:
+                    part[:, [0, 1]] = part[:, [1, 0]]
+                lon, lat = to_wgs84_lonlat(part[:, 0], part[:, 1], epsg)
+                part[:, 0] = lon
+                part[:, 1] = lat
+    except CRSError as exc:
+        raise GMLError(str(exc)) from exc
+    return epsg
+
+
+def load_gml(path: str, src_crs=None, swap_xy=None) -> Scene:
     """Read all line geometry from a GML file into a :class:`Scene`.
 
-    Raises :class:`GMLError` on a missing / unreadable / malformed file, or one
-    that contains no usable line geometry.
+    Geometry is reprojected to WGS84 lon/lat (the working CRS). ``src_crs`` and
+    ``swap_xy`` override the CRS / axis order detected from the GML ``srsName``.
+    The original XML tree is kept untouched, so export round-trips source
+    coordinates regardless of reprojection.
+
+    Raises :class:`GMLError` on a missing / unreadable / malformed file, one that
+    contains no usable line geometry, or an unsupported CRS.
     """
     if not os.path.exists(path):
         raise GMLError(f"File not found: {path}")
@@ -255,10 +285,14 @@ def load_gml(path: str) -> Scene:
             f"No line, multi-line, or polygon-boundary geometry found in {path}"
         )
 
+    applied_epsg = _reproject_features(features, crs, src_crs=src_crs, swap_xy=swap_xy)
+
     return Scene(
         features=features,
         crs=crs,
         source_path=os.path.abspath(path),
         tree_root=root,
         nsmap=nsmap,
+        working_crs="EPSG:4326",
+        source_epsg=applied_epsg,
     )

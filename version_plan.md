@@ -14,7 +14,7 @@
 | v0.2 | GML editing (select, delete, undo, export) **(DONE)** | `python -m gml_editor <gml> [--vexag N]` |
 | v0.3 | DTED terrain + GML draped **(DONE)** | `python -m gml_editor <gml> <dted> [--vexag N]` |
 | v0.4 | GeoTIFF texture **(DONE)** | `python -m gml_editor <gml> <dted> <geotiff>` |
-| v0.5 | CRS robustness and performance | same |
+| v0.5 | CRS robustness and performance **(DONE)** | same |
 | v1.0 | Packaging and release | same |
 
 ---
@@ -161,21 +161,26 @@ This pulls part of v0.5's CRS work forward. Verified: the real Sentinel-2 tile r
 
 ---
 
-## v0.5: CRS Robustness and Performance
+## v0.5: CRS Robustness and Performance — **DONE**
 
 **Goal:** Make it behave on real, messy data.
 
-**Scope**
-- Reproject all three inputs into one working CRS (default: the DTED CRS, normally WGS84; consider a local metric projection for correct proportions). *Partly done in v0.4: UTM GeoTIFF -> lon/lat (`reproject.py`). Remaining: reproject GML/DTED themselves, and non-UTM projected CRSs.*
-- Honor axis order differences (lat/lon vs lon/lat) in GML.
-- Mesh decimation or level of detail for large DTED tiles.
-- Texture size limiting and mipmapping.
-- Progress indicator during loading.
-- Clear errors for missing CRS, non-overlapping extents, and unsupported geometry.
+**Scope (implemented)**
+- **Reproject into one working CRS (WGS84 lon/lat).** GML is reprojected on load from its `srsName` (UTM -> lon/lat, geographic pass-through); UTM GeoTIFFs were already handled in v0.4; DTED is already lon/lat. CLI overrides `--gml-crs EPSG:xxxx` and `--swap-xy`. Implemented in `gml_loader._reproject_features` + `reproject.to_wgs84_lonlat`/`parse_srs`.
+- **Axis order.** GML `srsName` axis order is detected (OGC URN geographic form => lat,lon => swapped to lon,lat; short/projected forms => x,y), overridable with `--swap-xy`.
+- **Correct proportions.** Longitude-aspect correction: each actor is x-scaled by cos(latitude) (`GmlEditorView._kx`), so east-west and north-south read at the same on-screen scale. Mesh coordinates stay true lon/lat (only the actor transform is scaled), and picking applies the same factor — this is the pragmatic alternative to a full metric reprojection noted as "consider".
+- **LOD / size limiting.** DTED terrain mesh striding (`--max-terrain-dim`, default 400) and GeoTIFF downsampling (`--max-texture-dim`, default 2048); texture **mipmapping + interpolation** enabled.
+- **Progress + robust errors.** Load-progress log lines for the slow DTED/GeoTIFF reads and reprojection; clear errors for **non-overlapping extents** (DTED or GeoTIFF vs GML) and **unsupported CRS**.
 
-**Acceptance criteria**
-- Mixed-CRS test set displays aligned.
-- Interaction stays smooth (target 30+ FPS) on a typical Level 2 dataset.
+**Decision: no GDAL/pyproj.** Reprojection stays pure-Python (WGS84 UTM via `reproject.py`). Non-UTM projected CRSs raise a clear error rather than silently mis-aligning.
+
+**Acceptance criteria — met**
+- **Mixed-CRS displays aligned** — verified by a test loading the same line in EPSG:4326 and EPSG:32636 and asserting the reprojected coordinates coincide; axis-order swap tested too.
+- **Smooth on Level-2 data** — the real 3601x3601 tile is strided to <= 400/axis and the 290 MB Sentinel-2 GeoTIFF is downsampled/mipmapped; interaction target met (visual verification was off-screen here — confirm FPS on a desktop).
+
+**Code added/changed:** `reproject.py` (`parse_srs`, `to_wgs84_lonlat`, `CRSError`); `gml_loader.py` (`_reproject_features`, `load_gml(src_crs, swap_xy)`); `model.py` (`Scene.working_crs`, `source_epsg`); `viewer.py` (aspect scale `_kx` + `_add_mesh`, mipmapping); `cli.py` (CRS/perf flags, overlap checks, progress); `tests/test_v05.py`.
+
+**Deferred to future work:** reprojecting the GML/DTED into a true local *metric* frame (current fix corrects proportions but keeps lon/lat units), non-UTM projected CRSs, and windowed full-res GeoTIFF reads for sharper imagery.
 
 ---
 

@@ -11,7 +11,58 @@ common projected imagery. The functions are vectorised over NumPy arrays.
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
+
+# Geographic (lon/lat) datums we treat as already in the working CRS.
+_GEOGRAPHIC_EPSG = {4326, 4269, 4258, 4267}
+
+
+class CRSError(Exception):
+    """Raised for an unsupported or unparseable CRS."""
+
+
+def parse_srs(srs_name):
+    """Parse a GML ``srsName`` into ``(epsg, swap_axes)``.
+
+    ``swap_axes`` is True when the file's coordinate order is (lat, lon) and must
+    be swapped to the (lon/x, lat/y) order the rest of the app expects. By
+    convention the OGC URN form of a geographic CRS (``urn:ogc:def:crs:EPSG::4326``)
+    is lat/lon, while the short ``EPSG:4326`` form is lon/lat; projected CRSs are
+    easting/northing (no swap). Returns ``(None, False)`` for an absent srsName.
+    """
+    if not srs_name:
+        return None, False
+    nums = re.findall(r"\d+", srs_name)
+    epsg = int(nums[-1]) if nums else None
+    is_urn = "urn:" in srs_name.lower()
+    geographic = epsg in _GEOGRAPHIC_EPSG if epsg else False
+    return epsg, bool(geographic and is_urn)
+
+
+def is_geographic_epsg(epsg) -> bool:
+    return epsg in _GEOGRAPHIC_EPSG
+
+
+def to_wgs84_lonlat(x, y, epsg):
+    """Convert coordinates in CRS ``epsg`` (x=lon/easting, y=lat/northing) to lon/lat.
+
+    Supports geographic datums (passed through) and WGS84 UTM. Raises
+    :class:`CRSError` for anything else.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    if epsg is None or is_geographic_epsg(epsg):
+        return x, y
+    utm = epsg_to_utm(epsg)
+    if utm is not None:
+        zone, northern = utm
+        return utm_to_lonlat(x, y, zone, northern)
+    raise CRSError(
+        f"Unsupported CRS EPSG:{epsg}. Only geographic lon/lat and WGS84/UTM are "
+        f"handled; reproject the data to EPSG:4326 or a UTM zone first."
+    )
 
 # WGS84 ellipsoid.
 _A = 6378137.0

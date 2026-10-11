@@ -4,6 +4,8 @@ A Windows tool to view and edit GML line and polygon data in 3D, optionally
 draped over DTED terrain and GeoTIFF imagery. **Current version: v0.5.** See [version_plan.md](version_plan.md)
 for the full roadmap.
 
+GML can be created with Claude Code.
+
 DTED can be downloaded from: https://earthexplorer.usgs.gov/
 
 GeoTIFF can be downloaded from: https://geodataviewer.com/tools/satellite-download/

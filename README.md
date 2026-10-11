@@ -1,8 +1,7 @@
 # 3D Terrain GML Editor
 
 A Windows tool to view and edit GML line and polygon data in 3D, optionally
-draped over DTED terrain and GeoTIFF imagery. **Current version: v0.4 —
-editing + DTED terrain + GeoTIFF texture.** See [version_plan.md](version_plan.md)
+draped over DTED terrain and GeoTIFF imagery. **Current version: v0.5.** See [version_plan.md](version_plan.md)
 for the full roadmap.
 
 DTED can be downloaded from: https://earthexplorer.usgs.gov/

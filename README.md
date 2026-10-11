@@ -1,7 +1,7 @@
 # 3D Terrain GML Editor
 
-A Windows tool to view and edit GML line and polygon data in 3D, optionally
-draped over DTED terrain and GeoTIFF imagery. **Current version: v0.5.** See [version_plan.md](version_plan.md)
+A Windows tool to view and edit [GML](https://en.wikipedia.org/wiki/Geography_Markup_Language) line and polygon data in 3D, optionally
+draped over [DTED](https://en.wikipedia.org/wiki/DTED) terrain and [GeoTIFF](https://en.wikipedia.org/wiki/GeoTIFF) imagery. **Current version: v0.5.** See [version_plan.md](version_plan.md)
 for the full roadmap.
 
 GML can be created with Claude Code.

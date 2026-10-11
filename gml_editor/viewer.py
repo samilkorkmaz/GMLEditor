@@ -330,6 +330,7 @@ class GmlEditorView:
         texture_on: bool = True,
         arrow_az=None,
         arrow_el=None,
+        plotter=None,
     ):
         self.scene = scene
         self.vexag = vexag
@@ -341,6 +342,12 @@ class GmlEditorView:
         self._arrow_el = arrow_el
         self._arrow_tip = None
         self._arrow_len = 0.0
+        # Called with (lon, lat) whenever the arrow tip moves (e.g. a GUI panel
+        # updates its fields).
+        self.on_arrow_moved = None
+        # Called when the user presses 'q' (lets a host window close itself; the
+        # standalone plotter already quits on 'q' via VTK's default binding).
+        self.on_quit = None
 
         if not self.session.features:
             raise ValueError("Scene has no features to edit")
@@ -359,10 +366,13 @@ class GmlEditorView:
             lat0 = 0.5 * (b[2] + b[3]) if b is not None else 0.0
         self._kx = math.cos(math.radians(lat0)) or 1.0
 
-        title = window_title or f"GML Editor v0.5 — {scene.source_path}"
-        self.plotter = pv.Plotter(off_screen=off_screen, title=title)
+        # Use an externally supplied plotter (e.g. a pyvistaqt QtInteractor
+        # embedded in a window) when given, otherwise create our own.
+        title = window_title or f"GML Editor — {scene.source_path}"
+        self._owns_plotter = plotter is None
+        self.plotter = plotter if plotter is not None else pv.Plotter(off_screen=off_screen, title=title)
         self.plotter.set_background(_BACKGROUND)
-        self.plotter.add_axes(color=_AXES_LABEL_COLOR)
+        self._orient_axes_ned()
 
         # Build the static ground surface once: the DTED terrain if present,
         # else a flat plane only when there is imagery to drape on it.
@@ -398,8 +408,37 @@ class GmlEditorView:
         if not off_screen:
             self._wire_events()
 
+    def _orient_axes_ned(self) -> None:
+        """Add a right-handed NED orientation gizmo.
+
+        The data is ENU (x=East, y=North, z=Up). A right-handed NED gizmo labels
+        the arrows N, E, D pointing North (+y), East (+x), Down (-z); mapping the
+        axes actor's local x,y,z arrows there is a proper rotation (det +1), so
+        N x E = D as the right-hand rule requires.
+        """
+        try:
+            axes = pv.create_axes_marker(
+                xlabel="N", ylabel="E", zlabel="D", label_color=_AXES_LABEL_COLOR,
+            )
+            m = vtk.vtkMatrix4x4()  # identity
+            m.SetElement(0, 0, 0.0); m.SetElement(0, 1, 1.0)   # N -> +y, E -> +x
+            m.SetElement(1, 0, 1.0); m.SetElement(1, 1, 0.0)
+            m.SetElement(2, 2, -1.0)                            # D -> -z (down)
+            tr = vtk.vtkTransform()
+            tr.SetMatrix(m)
+            axes.SetUserTransform(tr)
+            self.plotter.add_orientation_widget(axes, interactive=False)
+        except Exception:  # pragma: no cover - older pyvista/vtk
+            self.plotter.add_axes(color=_AXES_LABEL_COLOR,
+                                  xlabel="N", ylabel="E", zlabel="D")
+
     def _add_mesh(self, mesh, **kwargs):
-        """add_mesh, then apply the longitude-aspect scale to the actor."""
+        """add_mesh, then apply the longitude-aspect scale to the actor.
+
+        Never resets the camera: the view is fitted once at startup and left
+        alone, so edits/toggles that re-add actors don't disturb it.
+        """
+        kwargs.setdefault("reset_camera", False)
         actor = self.plotter.add_mesh(mesh, **kwargs)
         try:
             actor.scale = (self._kx, 1.0, 1.0)
@@ -454,16 +493,51 @@ class GmlEditorView:
             return float(self.terrain.elevation_display(lon, lat))
         return 0.0
 
-    def _init_arrow(self) -> None:
-        """Place the arrow tip at the middle of the ground; length from the extent."""
+    def _arrow_length(self) -> float:
+        """Arrow length from the (aspect-corrected, cropped) scene dimensions."""
+        w, e, s, n = self._scene_extent()
+        return 0.5 * math.hypot((e - w) * self._kx, n - s)
+
+    def _ground_center(self):
         w, e, s, n = self._scene_extent()
         clon, clat = 0.5 * (w + e), 0.5 * (s + n)
-        # World space = (lon*kx, lat, z): the frame the actors are rendered in.
-        self._arrow_tip = np.array([clon * self._kx, clat, self._ground_z_display(clon, clat)])
-        width = (e - w) * self._kx
-        height = n - s
-        self._arrow_len = 0.5 * math.hypot(width, height)
+        return clon, clat
+
+    def _init_arrow(self) -> None:
+        """Place the arrow tip at the middle of the ground; length from the extent."""
+        self.set_arrow()
+
+    def set_arrow(self, az=None, el=None, lon=None, lat=None) -> None:
+        """Create/update the arrow. Missing angles default (az=0, el=45); missing
+        endpoint keeps the current tip, or the ground middle if there is none."""
+        if az is not None:
+            self._arrow_az = az
+        if el is not None:
+            self._arrow_el = el
+        if self._arrow_az is None:
+            self._arrow_az = 0.0
+        if self._arrow_el is None:
+            self._arrow_el = 45.0
+        if not self._arrow_len:
+            self._arrow_len = self._arrow_length()
+        if lon is not None and lat is not None:
+            self._arrow_tip = np.array([lon * self._kx, lat, self._ground_z_display(lon, lat)])
+        elif self._arrow_tip is None:
+            clon, clat = self._ground_center()
+            self._arrow_tip = np.array([clon * self._kx, clat, self._ground_z_display(clon, clat)])
         self._draw_arrow()
+        self._render()
+
+    def arrow_state(self):
+        """Current ``(az, el, lon, lat)`` of the arrow, or None if no arrow."""
+        if self._arrow_tip is None:
+            return None
+        return {
+            "az": self._arrow_az,
+            "el": self._arrow_el,
+            "lon": float(self._arrow_tip[0] / self._kx),
+            "lat": float(self._arrow_tip[1]),
+        }
 
     def _draw_arrow(self) -> None:
         """(Re)draw the red arrow pointing to ``self._arrow_tip`` from (az, el)."""
@@ -477,9 +551,10 @@ class GmlEditorView:
             start=tail, direction=direction, scale=float(np.linalg.norm(direction)),
             tip_length=0.22, tip_radius=0.05, shaft_radius=0.018,
         )
-        # Built directly in world space, so it is NOT aspect-scaled like the others.
+        # Built directly in world space, so it is NOT aspect-scaled like the
+        # others. reset_camera=False so moving the arrow doesn't jump the view.
         self.plotter.add_mesh(arrow, color=_ARROW_COLOR, name="direction_arrow",
-                              pickable=False, lighting=False)
+                              pickable=False, lighting=False, reset_camera=False)
 
     def _ray_plane(self, x, y, z0):
         """World point where the pick ray through display (x, y) meets plane z=z0."""
@@ -518,7 +593,10 @@ class GmlEditorView:
             return
         self._arrow_tip = np.asarray(pt, dtype=np.float64)
         self._draw_arrow()
-        log.info("Arrow tip -> lon %.5f, lat %.5f", self._arrow_tip[0] / self._kx, self._arrow_tip[1])
+        lon, lat = float(self._arrow_tip[0] / self._kx), float(self._arrow_tip[1])
+        log.info("Arrow tip -> lon %.5f, lat %.5f", lon, lat)
+        if self.on_arrow_moved is not None:
+            self.on_arrow_moved(lon, lat)
         self._render()
 
     def toggle_texture(self) -> None:
@@ -692,8 +770,12 @@ class GmlEditorView:
     # -- event wiring ------------------------------------------------------
 
     def _wire_events(self) -> None:
-        iren = getattr(self.plotter, "iren", None)
-        interactor = getattr(iren, "interactor", None) if iren is not None else None
+        # Works for both pv.Plotter and pyvistaqt.QtInteractor.
+        rw = getattr(self.plotter, "render_window", None)
+        interactor = rw.GetInteractor() if rw is not None else None
+        if interactor is None:
+            iren = getattr(self.plotter, "iren", None)
+            interactor = getattr(iren, "interactor", None) if iren is not None else None
         if interactor is None:
             return
 
@@ -719,6 +801,8 @@ class GmlEditorView:
                 self.export()
             elif sym == "t":
                 self.toggle_texture()
+            elif sym == "q" and self.on_quit is not None:
+                self.on_quit()
 
         interactor.AddObserver("LeftButtonPressEvent", on_left_press, 1.0)
         interactor.AddObserver("KeyPressEvent", on_key, 1.0)

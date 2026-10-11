@@ -13,12 +13,14 @@ GeoTIFF can be downloaded from: https://geodataviewer.com/tools/satellite-downlo
 
 - Python 3.10+
 - `numpy`, `pyvista` (VTK is pulled in by PyVista), `Pillow`
+- `pyvistaqt` + a Qt binding (`PyQt5` or `PySide6`) — for the interactive window
+  with the top panel
 - Optional: `tifffile` + `imagecodecs` — for compressed/tiled GeoTIFFs
   (e.g. Sentinel-2 / GDAL output). Without them, only simple uncompressed
   GeoTIFFs load (via Pillow).
 
 ```
-pip install --user pyvista numpy Pillow
+pip install --user pyvista pyvistaqt PyQt5 numpy Pillow
 pip install --user tifffile imagecodecs      # for real-world GeoTIFFs
 ```
 
@@ -43,11 +45,21 @@ onto; the GeoTIFF is draped over it as imagery. By default the terrain is
 speck on a full 1-degree tile; pass `--full-terrain` to show the whole tile.
 Pass `--no-texture` to start with the imagery hidden.
 
-A 3D window opens with the data auto-fitted to view. Navigate with the mouse:
+An interactive window opens: a **top panel** above the 3D view. Navigate the 3D
+view with the mouse:
 
 - **Left drag** — rotate
 - **Mouse wheel** — zoom
 - **Middle drag / Shift+Left drag** — pan
+
+### Top panel
+
+The panel shows the loaded **GML / DTED / TIFF** file names and the direction
+arrow's **Az**, **El**, **Lat**, **Lon** in editable fields, plus two buttons
+(handlers to be implemented). Editing a field and pressing Enter or clicking away
+updates the arrow; double-clicking the scene moves the arrow's tip and writes the
+new Lat/Lon back into the panel. (The panel requires `pyvistaqt` + a Qt binding;
+without them the app falls back to a basic viewer. `--screenshot` never needs Qt.)
 
 ### Editing (v0.2)
 
@@ -127,6 +139,7 @@ python -m tests.test_v03
 python -m tests.test_v04
 python -m tests.test_v05
 python -m tests.test_arrow
+python -m tests.test_gui
 ```
 
 v0.1 covers loading + rendering; v0.2 covers editing (select / delete /
@@ -150,8 +163,9 @@ pip install --user pyinstaller
 python -m PyInstaller --noconfirm gml_editor.spec
 ```
 
-This produces `dist\gml_editor\` (**~380 MB**) containing `gml_editor.exe` plus
-its bundled DLLs in `_internal\`. Distribute the **whole folder** (zip it). Run
+This produces `dist\gml_editor\` (**~500 MB** — the Qt GUI stack adds ~130 MB
+over the headless core) containing `gml_editor.exe` plus its bundled DLLs in
+`_internal\`. Distribute the **whole folder** (zip it). Run
 it exactly like the Python version — command-line arguments work identically:
 
 ```
@@ -159,12 +173,12 @@ dist\gml_editor\gml_editor.exe ankara_sample.gml --vexag 50
 dist\gml_editor\gml_editor.exe ankara_sample.gml --screenshot out.png
 ```
 
-The spec ([gml_editor.spec](gml_editor.spec)) collects `vtk` and `pyvista`, and
-**excludes ~320 MB of transitive dependencies the app never imports** (PyQt5,
-scipy, llvmlite/numba, pandas, lxml, pydantic, qtpy, …). Without the excludes
-the bundle is ~700 MB. The exclude list was derived empirically by checking
-which modules actually load during a full render; `matplotlib` (colormaps/fonts)
-and `PIL` (screenshots) are kept because they are used.
+The spec ([gml_editor.spec](gml_editor.spec)) collects `vtk`, `pyvista`,
+`pyvistaqt`/`qtpy`/`PyQt5` (the GUI panel) and `tifffile`/`imagecodecs`
+(GeoTIFF), and **excludes transitive dependencies the app never imports**
+(scipy, llvmlite/numba, pandas, lxml, pydantic, …). The exclude list was derived
+empirically by checking which modules actually load; `matplotlib` (colormaps/
+fonts) and `PIL` (screenshots) are kept because they are used.
 
 Notes:
 - `--onedir` (a folder, set in the spec) is preferred over `--onefile`: faster
@@ -208,7 +222,8 @@ gml_editor/
   geotiff.py      load_geotiff() (tifffile/Pillow GeoTIFF reader, CRS detect)
   reproject.py    pure-Python UTM<->WGS84 + reproject_to_lonlat()
   terrain.py      Terrain (elevation sampler + mesh), densify()
-  viewer.py       mesh building + draping + texturing, GmlEditorView, render_scene
+  viewer.py       mesh building + draping + texturing + arrow, GmlEditorView
+  gui.py          Qt window: top panel (files, arrow fields, buttons) + 3D view
   cli.py          command line, logging, input classification
   __main__.py     entry point (python -m gml_editor)
 tests/
@@ -218,6 +233,7 @@ tests/
   test_v04.py     v0.4 tests (GeoTIFF, alignment, texturing)
   test_v05.py     v0.5 tests (CRS reprojection, axis order, overlap, proportions)
   test_arrow.py   direction-arrow tests (orientation, placement, move)
+  test_gui.py     Qt panel tests (file labels, field<->arrow sync, buttons)
 run_gml_editor.py PyInstaller entry point (see "Building a standalone executable")
 ankara_sample.gml Sample GML (Ankara roads + buildings, EPSG:4326)
 n39_e032_1arc_v3.dt2 Sample DTED tile covering the GML extent

@@ -10,23 +10,20 @@ tmp_ret = collect_all('pyvista')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 # GeoTIFF reading (compressed/tiled). imagecodecs ships many binary codec
 # extensions that static analysis misses, so collect it wholesale.
-for _pkg in ('tifffile', 'imagecodecs'):
+# The Qt GUI (top panel) needs pyvistaqt + qtpy + PyQt5 (and its plugins).
+for _pkg in ('tifffile', 'imagecodecs', 'pyvistaqt', 'qtpy', 'PyQt5'):
     try:
         tmp_ret = collect_all(_pkg)
         datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
     except Exception:
-        pass  # optional: the app falls back to Pillow for simple TIFFs
-
-# NOTE: pyvistaqt/qtpy/PyQt are intentionally NOT collected. The app uses a
-# plain pyvista.Plotter (no Qt backend), so the Qt stack is dead weight (~131 MB).
+        pass  # optional: app falls back (Pillow for TIFFs, basic viewer w/o Qt)
 
 # Large transitive dependencies that pyvista can pull in but this app never
-# imports at runtime (verified by probing sys.modules after a full render +
-# screenshot). Excluding them cuts the bundle by ~320 MB. matplotlib and PIL
-# are deliberately kept: pyvista uses matplotlib for colormaps/fonts and PIL
-# for screenshots.
+# imports at runtime (verified by probing sys.modules). Excluding them keeps the
+# bundle smaller. matplotlib and PIL are kept (colormaps/fonts, screenshots);
+# the Qt stack is now kept too (needed by the GUI panel), which adds ~130 MB.
 EXCLUDES = [
-    'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'pyvistaqt', 'qtpy',
+    'PyQt6', 'PySide2', 'PySide6',
     'scipy', 'llvmlite', 'numba', 'pandas', 'lxml',
     'pydantic', 'pydantic_core',
     'trame', 'imageio',

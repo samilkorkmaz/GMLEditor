@@ -328,15 +328,23 @@ def main(argv=None) -> int:
             log.info("Wrote screenshot: %s", args.screenshot)
         else:
             controls = ("Controls: left-click select | Delete remove | "
-                        "Ctrl+Z undo | Ctrl+Y redo | Ctrl+S export | q quit")
+                        "Ctrl+Z undo | Ctrl+Y redo | Ctrl+S export | "
+                        "q / Ctrl+Q quit")
             if geoimage is not None:
                 controls += " | t texture"
-            if args.arrow:
-                controls += " | double-click move arrow"
+            controls += " | double-click move arrow"
             log.info(controls)
-            render_scene(scene, vexag=args.vexag, terrain=terrain,
-                         geoimage=geoimage, texture_on=texture_on,
-                         arrow_az=arrow_az, arrow_el=arrow_el)
+            files = {"gml": gml_path, "dted": dted_path, "geotiff": geotiff_path}
+            try:
+                from .gui import launch
+                return launch(scene, vexag=args.vexag, terrain=terrain,
+                              geoimage=geoimage, texture_on=texture_on,
+                              arrow_az=arrow_az, arrow_el=arrow_el, files=files)
+            except Exception as exc:
+                log.warning("GUI panel unavailable (%s); using the basic viewer.", exc)
+                render_scene(scene, vexag=args.vexag, terrain=terrain,
+                             geoimage=geoimage, texture_on=texture_on,
+                             arrow_az=arrow_az, arrow_el=arrow_el)
     except Exception as exc:  # pragma: no cover - runtime display issue
         log.error("Rendering failed: %s", exc)
         return 2

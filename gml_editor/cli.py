@@ -145,6 +145,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Max GeoTIFF texture resolution per axis (default 2048).",
     )
     parser.add_argument(
+        "--arrow",
+        nargs=2,
+        type=float,
+        default=None,
+        metavar=("AZ", "EL"),
+        help="Draw a red direction arrow pointing to the middle of the ground, "
+             "oriented by AZ (azimuth degrees clockwise from True North) and EL "
+             "(elevation degrees above the horizon). Double-click the scene to "
+             "move the arrow's tip (angles stay fixed).",
+    )
+    parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
     )
     return parser
@@ -303,10 +314,15 @@ def main(argv=None) -> int:
         )
 
     texture_on = not args.no_texture
+    arrow_az, arrow_el = (args.arrow if args.arrow else (None, None))
+    if args.arrow:
+        log.info("Direction arrow: azimuth %g deg from North, elevation %g deg above horizon",
+                 arrow_az, arrow_el)
     try:
         if args.screenshot:
             plotter = render_scene(scene, off_screen=True, vexag=args.vexag,
-                                   terrain=terrain, geoimage=geoimage, texture_on=texture_on)
+                                   terrain=terrain, geoimage=geoimage, texture_on=texture_on,
+                                   arrow_az=arrow_az, arrow_el=arrow_el)
             plotter.screenshot(args.screenshot)
             plotter.close()
             log.info("Wrote screenshot: %s", args.screenshot)
@@ -315,9 +331,12 @@ def main(argv=None) -> int:
                         "Ctrl+Z undo | Ctrl+Y redo | Ctrl+S export | q quit")
             if geoimage is not None:
                 controls += " | t texture"
+            if args.arrow:
+                controls += " | double-click move arrow"
             log.info(controls)
             render_scene(scene, vexag=args.vexag, terrain=terrain,
-                         geoimage=geoimage, texture_on=texture_on)
+                         geoimage=geoimage, texture_on=texture_on,
+                         arrow_az=arrow_az, arrow_el=arrow_el)
     except Exception as exc:  # pragma: no cover - runtime display issue
         log.error("Rendering failed: %s", exc)
         return 2

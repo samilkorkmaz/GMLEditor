@@ -59,6 +59,20 @@ A 3D window opens with the data auto-fitted to view. Navigate with the mouse:
 - **Ctrl+S** — export the edited GML to `<input>_edited.gml` (the input file is
   never overwritten). Survivors keep their original schema, attributes, and CRS.
 - **t** — toggle the GeoTIFF imagery on/off (when a GeoTIFF is loaded).
+- **Double-click** — move the direction arrow's tip to the clicked ground point
+  (when `--arrow` is used; the azimuth/elevation stay fixed).
+
+### Direction arrow (`--arrow AZ EL`)
+
+`--arrow AZ EL` draws a red arrow pointing to the middle of the ground, oriented
+by **AZ** (azimuth in degrees clockwise from True North) and **EL** (elevation
+in degrees above the horizon) — e.g. a sensor line-of-sight or sun vector. Its
+length is set from the (cropped) scene dimensions. Double-clicking the scene
+translates the arrow so its tip is the clicked ground point, keeping AZ/EL.
+
+```
+python -m gml_editor ankara_sample.gml n39_e032_1arc_v3.dt2 --vexag 15 --arrow 45 30
+```
 
 Feature count, per-layer counts, vertex count, and CRS are logged to the console.
 
@@ -112,6 +126,7 @@ python -m tests.test_v02
 python -m tests.test_v03
 python -m tests.test_v04
 python -m tests.test_v05
+python -m tests.test_arrow
 ```
 
 v0.1 covers loading + rendering; v0.2 covers editing (select / delete /
@@ -202,6 +217,7 @@ tests/
   test_v03.py     v0.3 tests (DTED, draping, terrain picking)
   test_v04.py     v0.4 tests (GeoTIFF, alignment, texturing)
   test_v05.py     v0.5 tests (CRS reprojection, axis order, overlap, proportions)
+  test_arrow.py   direction-arrow tests (orientation, placement, move)
 run_gml_editor.py PyInstaller entry point (see "Building a standalone executable")
 ankara_sample.gml Sample GML (Ankara roads + buildings, EPSG:4326)
 n39_e032_1arc_v3.dt2 Sample DTED tile covering the GML extent

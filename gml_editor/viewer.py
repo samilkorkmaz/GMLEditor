@@ -58,6 +58,21 @@ _PICK_THRESHOLD_PX = 12.0
 _NEUTRAL_RGB = (58, 62, 68)
 _NO_TEXTURE_TERRAIN = "#6b7a5e"
 
+# Direction arrow.
+_ARROW_COLOR = "#e23b3b"
+
+
+def arrow_direction(az_deg: float, el_deg: float) -> np.ndarray:
+    """Unit vector toward the source defined by azimuth (from True North,
+    clockwise) and elevation (above the horizon), in (east, north, up)."""
+    az = math.radians(az_deg)
+    el = math.radians(el_deg)
+    return np.array([
+        math.sin(az) * math.cos(el),   # east  (x)
+        math.cos(az) * math.cos(el),   # north (y)
+        math.sin(el),                  # up    (z)
+    ], dtype=np.float64)
+
 # Approximate length of one degree of latitude, in metres.
 _METRES_PER_DEGREE = 111_320.0
 
@@ -313,6 +328,8 @@ class GmlEditorView:
         terrain=None,
         geoimage=None,
         texture_on: bool = True,
+        arrow_az=None,
+        arrow_el=None,
     ):
         self.scene = scene
         self.vexag = vexag
@@ -320,6 +337,10 @@ class GmlEditorView:
         self.terrain = terrain
         self.geoimage = geoimage
         self.session = EditSession(scene)
+        self._arrow_az = arrow_az
+        self._arrow_el = arrow_el
+        self._arrow_tip = None
+        self._arrow_len = 0.0
 
         if not self.session.features:
             raise ValueError("Scene has no features to edit")
@@ -366,6 +387,8 @@ class GmlEditorView:
         self._building_actor = None
 
         self._rebuild_meshes()
+        if arrow_az is not None and arrow_el is not None:
+            self._init_arrow()
         has_relief = bool(
             terrain is not None
             or (self._z_factor > 0 and scene_max_height_metres(scene, self.session.features) > 0)
@@ -387,26 +410,116 @@ class GmlEditorView:
     # -- ground surface (terrain / textured plane) -------------------------
 
     def _add_ground_actor(self) -> None:
-        """(Re)add the ground actor, textured or plain per ``self._textured``."""
+        """(Re)add the ground actor, textured or plain per ``self._textured``.
+
+        The ground is pickable so a double-click can resolve the point on it (for
+        moving the direction arrow); feature selection ignores it by actor identity.
+        """
+        self._ground_actor = None
         if self._ground_mesh is None:
             return
         self.plotter.remove_actor("gml_terrain")
         if self._textured and self._texture is not None:
-            self._add_mesh(
+            self._ground_actor = self._add_mesh(
                 self._ground_mesh, texture=self._texture, name="gml_terrain",
-                pickable=False, lighting=True,
+                pickable=True, lighting=True,
             )
         elif self._has_elevation:
-            self._add_mesh(
+            self._ground_actor = self._add_mesh(
                 self._ground_mesh, scalars="elevation_m", cmap="gist_earth",
-                show_scalar_bar=False, name="gml_terrain", pickable=False,
+                show_scalar_bar=False, name="gml_terrain", pickable=True,
                 lighting=True,
             )
         else:
-            self._add_mesh(
+            self._ground_actor = self._add_mesh(
                 self._ground_mesh, color=_NO_TEXTURE_TERRAIN, name="gml_terrain",
-                pickable=False, lighting=True,
+                pickable=True, lighting=True,
             )
+
+    # -- direction arrow ---------------------------------------------------
+
+    def _scene_extent(self):
+        """(west, east, south, north) in lon/lat of the (cropped) scene."""
+        if self.terrain is not None:
+            g = self.terrain.grid
+            return (g.lon0, g.lon1, g.lat0, g.lat1)
+        if self.geoimage is not None:
+            return self.geoimage.extent
+        b = self.scene.bounds()
+        return (b[0], b[1], b[2], b[3]) if b is not None else (0.0, 1.0, 0.0, 1.0)
+
+    def _ground_z_display(self, lon, lat) -> float:
+        """Display-space z of the ground at lon/lat (terrain height, else 0)."""
+        if self.terrain is not None:
+            return float(self.terrain.elevation_display(lon, lat))
+        return 0.0
+
+    def _init_arrow(self) -> None:
+        """Place the arrow tip at the middle of the ground; length from the extent."""
+        w, e, s, n = self._scene_extent()
+        clon, clat = 0.5 * (w + e), 0.5 * (s + n)
+        # World space = (lon*kx, lat, z): the frame the actors are rendered in.
+        self._arrow_tip = np.array([clon * self._kx, clat, self._ground_z_display(clon, clat)])
+        width = (e - w) * self._kx
+        height = n - s
+        self._arrow_len = 0.5 * math.hypot(width, height)
+        self._draw_arrow()
+
+    def _draw_arrow(self) -> None:
+        """(Re)draw the red arrow pointing to ``self._arrow_tip`` from (az, el)."""
+        if self._arrow_tip is None:
+            return
+        u = arrow_direction(self._arrow_az, self._arrow_el)
+        tail = self._arrow_tip + u * self._arrow_len   # up toward the source
+        direction = self._arrow_tip - tail             # points down to the ground
+        self.plotter.remove_actor("direction_arrow")
+        arrow = pv.Arrow(
+            start=tail, direction=direction, scale=float(np.linalg.norm(direction)),
+            tip_length=0.22, tip_radius=0.05, shaft_radius=0.018,
+        )
+        # Built directly in world space, so it is NOT aspect-scaled like the others.
+        self.plotter.add_mesh(arrow, color=_ARROW_COLOR, name="direction_arrow",
+                              pickable=False, lighting=False)
+
+    def _ray_plane(self, x, y, z0):
+        """World point where the pick ray through display (x, y) meets plane z=z0."""
+        ren = self.plotter.renderer
+        eye = np.array(ren.GetActiveCamera().GetPosition(), dtype=np.float64)
+        ren.SetDisplayPoint(float(x), float(y), 0.0)
+        ren.DisplayToWorld()
+        w = ren.GetWorldPoint()
+        near = np.array(w[:3], dtype=np.float64) / (w[3] if w[3] != 0 else 1.0)
+        d = near - eye
+        if abs(d[2]) < 1e-12:
+            return self._arrow_tip
+        t = (z0 - eye[2]) / d[2]
+        return eye + t * d
+
+    def _ground_pick(self, x, y):
+        """World point on the ground under display (x, y) (cell pick, else ray/plane)."""
+        if self._ground_actor is not None:
+            picker = vtk.vtkCellPicker()
+            picker.SetTolerance(0.005)
+            picker.PickFromListOn()
+            picker.GetPickList().RemoveAllItems()
+            picker.AddPickList(self._ground_actor)
+            picker.Pick(float(x), float(y), 0.0, self.plotter.renderer)
+            if picker.GetCellId() >= 0:
+                return np.array(picker.GetPickPosition(), dtype=np.float64)
+        z0 = float(self._arrow_tip[2]) if self._arrow_tip is not None else 0.0
+        return self._ray_plane(x, y, z0)
+
+    def move_arrow_to_display(self, x, y) -> None:
+        """Translate the arrow so its tip is the ground point under (x, y)."""
+        if self._arrow_tip is None:
+            return
+        pt = self._ground_pick(x, y)
+        if pt is None:
+            return
+        self._arrow_tip = np.asarray(pt, dtype=np.float64)
+        self._draw_arrow()
+        log.info("Arrow tip -> lon %.5f, lat %.5f", self._arrow_tip[0] / self._kx, self._arrow_tip[1])
+        self._render()
 
     def toggle_texture(self) -> None:
         """Show/hide the GeoTIFF imagery on the ground surface."""
@@ -586,7 +699,12 @@ class GmlEditorView:
 
         def on_left_press(obj, _event):
             px, py = interactor.GetEventPosition()
-            self.select_at_display(px, py)
+            # A double-click (RepeatCount > 0) translates the direction arrow;
+            # a single click selects a feature.
+            if interactor.GetRepeatCount() and self._arrow_tip is not None:
+                self.move_arrow_to_display(px, py)
+            else:
+                self.select_at_display(px, py)
 
         def on_key(obj, _event):
             sym = (interactor.GetKeySym() or "").lower()
@@ -617,18 +735,22 @@ def render_scene(
     terrain=None,
     geoimage=None,
     texture_on: bool = True,
+    arrow_az=None,
+    arrow_el=None,
 ):
     """Open the interactive editor on ``scene``.
 
     When ``terrain`` is given, the GML is draped onto it; when ``geoimage`` is
-    given, it is draped as a texture over the terrain (or a flat plane). With
-    ``off_screen=True`` the view is built but not shown (used for tests and
-    ``--screenshot``). Returns the :class:`pyvista.Plotter`; the
+    given, it is draped as a texture over the terrain (or a flat plane). When
+    ``arrow_az``/``arrow_el`` are given, a red direction arrow is drawn to the
+    middle of the ground (double-click moves its tip). With ``off_screen=True``
+    the view is built but not shown. Returns the :class:`pyvista.Plotter`; the
     :class:`GmlEditorView` is reachable via ``plotter._gml_view``.
     """
     view = GmlEditorView(scene, vexag=vexag, off_screen=off_screen,
                          window_title=window_title, terrain=terrain,
-                         geoimage=geoimage, texture_on=texture_on)
+                         geoimage=geoimage, texture_on=texture_on,
+                         arrow_az=arrow_az, arrow_el=arrow_el)
     # Stash so --screenshot / tests can reach edit methods if needed.
     view.plotter._gml_view = view
     if not off_screen:

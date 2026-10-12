@@ -77,7 +77,7 @@ def arrow_direction(az_deg: float, el_deg: float) -> np.ndarray:
 _METRES_PER_DEGREE = 111_320.0
 
 # Attribute keys consulted for a height when the geometry itself has no z.
-_HEIGHT_KEYS = ("height_m", "height", "HEIGHT", "z", "elevation")
+_HEIGHT_KEYS = ("height_m", "height", "HEIGHT", "z", "elevation", "YUKSEKLIK")
 
 _POLYGON_TYPES = ("Polygon", "MultiPolygon")
 

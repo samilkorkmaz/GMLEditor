@@ -35,7 +35,8 @@ import pyvista as pv
 import vtk
 
 from .editing import EditSession
-from .model import Feature, Scene
+from .model import (_POLYGON_TYPES, Feature, Scene, _feature_height_metres,
+                    scene_max_height_metres)
 from .terrain import densify
 
 log = logging.getLogger("gml_editor.viewer")
@@ -76,12 +77,6 @@ def arrow_direction(az_deg: float, el_deg: float) -> np.ndarray:
 # Approximate length of one degree of latitude, in metres.
 _METRES_PER_DEGREE = 111_320.0
 
-# Attribute keys consulted for a height when the geometry itself has no z.
-_HEIGHT_KEYS = ("height_m", "height", "HEIGHT", "z", "elevation", "YUKSEKLIK")
-
-_POLYGON_TYPES = ("Polygon", "MultiPolygon")
-
-
 def _metres_per_horizontal_unit(crs) -> float:
     """Metres represented by one unit of the x/y coordinates (degrees vs metres)."""
     if crs is None:
@@ -90,34 +85,6 @@ def _metres_per_horizontal_unit(crs) -> float:
     if any(tag in c for tag in ("4326", "4269", "CRS84", "WGS84", "WGS 84")):
         return _METRES_PER_DEGREE
     return 1.0
-
-
-def _feature_height_metres(feature: Feature) -> float:
-    """Height of a feature in metres: prefer the geometry's z, else an attribute."""
-    zmax = 0.0
-    for part in feature.parts:
-        if len(part):
-            zmax = max(zmax, float(np.nanmax(part[:, 2])))
-    if zmax > 0:
-        return zmax
-    for key in _HEIGHT_KEYS:
-        val = feature.attributes.get(key)
-        if val is not None:
-            try:
-                return float(val)
-            except (TypeError, ValueError):
-                pass
-    return 0.0
-
-
-def scene_max_height_metres(scene: Scene, features=None) -> float:
-    """Largest polygon height in metres among ``features`` (default: scene's)."""
-    feats = scene.features if features is None else features
-    h = 0.0
-    for f in feats:
-        if f.geom_type in _POLYGON_TYPES:
-            h = max(h, _feature_height_metres(f))
-    return h
 
 
 def _displayed_line_parts(feats, z_factor: float, terrain=None):

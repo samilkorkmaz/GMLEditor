@@ -16,6 +16,7 @@ import sys
 
 from . import __version__
 from .gml_loader import GMLError, load_gml
+from .model import scene_max_height_metres
 
 log = logging.getLogger("gml_editor")
 
@@ -210,11 +211,18 @@ def main(argv=None) -> int:
     bounds = scene.bounds()
     if bounds is not None:
         zmax_m = max(abs(bounds[4]), abs(bounds[5]))
-    if zmax_m > 0:
-        log.info(
-            "Z/height present (max %.3g source units); vertical exaggeration: %gx",
-            zmax_m, args.vexag,
-        )
+    attr_height_m = scene_max_height_metres(scene) if zmax_m == 0 else 0.0
+    if zmax_m > 0 or attr_height_m > 0:
+        if zmax_m > 0:
+            log.info(
+                "Z/height present (max %.3g source units); vertical exaggeration: %gx",
+                zmax_m, args.vexag,
+            )
+        else:
+            log.info(
+                "Height attributes present (max %.3g m); vertical exaggeration: %gx",
+                attr_height_m, args.vexag,
+            )
         if args.vexag == 0:
             log.info("  (--vexag 0: heights flattened; pass e.g. --vexag 30 to see them)")
     else:

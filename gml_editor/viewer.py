@@ -61,6 +61,7 @@ _NO_TEXTURE_TERRAIN = "#6b7a5e"
 
 # Direction arrow.
 _ARROW_COLOR = "#e23b3b"
+_ARROW_OPACITY = 0.5
 
 
 def arrow_direction(az_deg: float, el_deg: float) -> np.ndarray:
@@ -520,7 +521,8 @@ class GmlEditorView:
         )
         # Built directly in world space, so it is NOT aspect-scaled like the
         # others. reset_camera=False so moving the arrow doesn't jump the view.
-        self.plotter.add_mesh(arrow, color=_ARROW_COLOR, name="direction_arrow",
+        self.plotter.add_mesh(arrow, color=_ARROW_COLOR, opacity=_ARROW_OPACITY,
+                              name="direction_arrow",
                               pickable=False, lighting=False, reset_camera=False)
 
     def _ray_plane(self, x, y, z0):

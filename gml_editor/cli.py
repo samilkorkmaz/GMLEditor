@@ -157,6 +157,16 @@ def build_parser() -> argparse.ArgumentParser:
              "move the arrow's tip (angles stay fixed).",
     )
     parser.add_argument(
+        "--circles",
+        nargs="+",
+        type=float,
+        default=None,
+        metavar="R",
+        help="Draw up to 3 horizontal range circles of radius R metres around "
+             "the arrow tip (or the ground middle): smallest red, middle orange, "
+             "largest yellow.",
+    )
+    parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
     )
     return parser
@@ -323,6 +333,12 @@ def main(argv=None) -> int:
 
     texture_on = not args.no_texture
     arrow_az, arrow_el = (args.arrow if args.arrow else (None, None))
+    circle_radii = sorted(args.circles) if args.circles else None
+    if circle_radii:
+        if len(circle_radii) > 3 or any(r <= 0 for r in circle_radii):
+            log.error("--circles takes 1 to 3 positive radii in metres")
+            return 1
+        log.info("Range circles (m): %s", ", ".join(f"{r:g}" for r in circle_radii))
     if args.arrow:
         log.info("Direction arrow: azimuth %g deg from North, elevation %g deg above horizon",
                  arrow_az, arrow_el)
@@ -330,7 +346,8 @@ def main(argv=None) -> int:
         if args.screenshot:
             plotter = render_scene(scene, off_screen=True, vexag=args.vexag,
                                    terrain=terrain, geoimage=geoimage, texture_on=texture_on,
-                                   arrow_az=arrow_az, arrow_el=arrow_el)
+                                   arrow_az=arrow_az, arrow_el=arrow_el,
+                                   circle_radii=circle_radii)
             plotter.screenshot(args.screenshot)
             plotter.close()
             log.info("Wrote screenshot: %s", args.screenshot)
@@ -347,12 +364,14 @@ def main(argv=None) -> int:
                 from .gui import launch
                 return launch(scene, vexag=args.vexag, terrain=terrain,
                               geoimage=geoimage, texture_on=texture_on,
-                              arrow_az=arrow_az, arrow_el=arrow_el, files=files)
+                              arrow_az=arrow_az, arrow_el=arrow_el, files=files,
+                              circle_radii=circle_radii)
             except Exception as exc:
                 log.warning("GUI panel unavailable (%s); using the basic viewer.", exc)
                 render_scene(scene, vexag=args.vexag, terrain=terrain,
                              geoimage=geoimage, texture_on=texture_on,
-                             arrow_az=arrow_az, arrow_el=arrow_el)
+                             arrow_az=arrow_az, arrow_el=arrow_el,
+                             circle_radii=circle_radii)
     except Exception as exc:  # pragma: no cover - runtime display issue
         log.error("Rendering failed: %s", exc)
         return 2

@@ -62,9 +62,11 @@ _NO_TEXTURE_TERRAIN = "#6b7a5e"
 # Direction arrow.
 _ARROW_COLOR = "#e23b3b"
 _ARROW_OPACITY = 0.5
-# Opaque triangle at the arrow tip, as fractions of the arrow length.
-_ARROW_HEAD_LENGTH = 0.06
-_ARROW_HEAD_HALF_WIDTH = 0.025
+
+# Range circles, smallest to largest.
+_CIRCLE_COLORS = ("#e23b3b", "#ff9a1f", "#ffe14d")  # red, orange, yellow
+_CIRCLE_WIDTH = 3
+_CIRCLE_SEGMENTS = 180
 
 
 def arrow_direction(az_deg: float, el_deg: float) -> np.ndarray:
@@ -302,6 +304,7 @@ class GmlEditorView:
         arrow_az=None,
         arrow_el=None,
         plotter=None,
+        circle_radii=None,
     ):
         self.scene = scene
         self.vexag = vexag
@@ -313,6 +316,9 @@ class GmlEditorView:
         self._arrow_el = arrow_el
         self._arrow_tip = None
         self._arrow_len = 0.0
+        # Up to 3 radii in metres, drawn as horizontal circles around the arrow
+        # tip (or the ground middle when there is no arrow), smallest first.
+        self._circle_radii = sorted(circle_radii or [])[:len(_CIRCLE_COLORS)]
         # Called with (lon, lat) whenever the arrow tip moves (e.g. a GUI panel
         # updates its fields).
         self.on_arrow_moved = None
@@ -370,6 +376,8 @@ class GmlEditorView:
         self._rebuild_meshes()
         if arrow_az is not None and arrow_el is not None:
             self._init_arrow()
+        else:
+            self._draw_circles()
         has_relief = bool(
             terrain is not None
             or (self._z_factor > 0 and scene_max_height_metres(scene, self.session.features) > 0)
@@ -518,7 +526,6 @@ class GmlEditorView:
         tail = self._arrow_tip + u * self._arrow_len   # up toward the source
         direction = self._arrow_tip - tail             # points down to the ground
         self.plotter.remove_actor("direction_arrow")
-        self.plotter.remove_actor("direction_arrow_head")
         arrow = pv.Arrow(
             start=tail, direction=direction, scale=float(np.linalg.norm(direction)),
             tip_length=0.02, tip_radius=0.005, shaft_radius=0.002,
@@ -528,19 +535,30 @@ class GmlEditorView:
         self.plotter.add_mesh(arrow, color=_ARROW_COLOR, opacity=_ARROW_OPACITY,
                               name="direction_arrow",
                               pickable=False, lighting=False, reset_camera=False)
+        self._draw_circles()
 
-        # Flat triangle with its apex on the tip, lying in the arrow's vertical
-        # plane (spanned by the arrow and the up axis) so it reads as a head.
-        d = direction / np.linalg.norm(direction)
-        az = math.radians(self._arrow_az)
-        normal = np.array([math.cos(az), -math.sin(az), 0.0])  # horizontal, off-plane
-        side = np.cross(d, normal)
-        base = self._arrow_tip - d * (self._arrow_len * _ARROW_HEAD_LENGTH)
-        half = side * (self._arrow_len * _ARROW_HEAD_HALF_WIDTH)
-        head = pv.PolyData(np.array([self._arrow_tip, base + half, base - half]),
-                           faces=np.array([3, 0, 1, 2]))
-        self.plotter.add_mesh(head, color=_ARROW_COLOR, name="direction_arrow_head",
-                              pickable=False, lighting=False, reset_camera=False)
+    def _draw_circles(self) -> None:
+        """(Re)draw the range circles in the horizontal plane through the arrow
+        tip, or the ground middle at ground height when there is no arrow."""
+        if not self._circle_radii:
+            return
+        if self._arrow_tip is not None:
+            center = self._arrow_tip
+        else:
+            clon, clat = self._ground_center()
+            center = np.array([clon * self._kx, clat, self._ground_z_display(clon, clat)])
+        # Built in world space like the arrow: x is already lon * kx, so one
+        # display unit is the same length on both axes and the circle stays round.
+        t = np.linspace(0.0, 2.0 * math.pi, _CIRCLE_SEGMENTS + 1)
+        for i, (radius_m, color) in enumerate(zip(self._circle_radii, _CIRCLE_COLORS)):
+            name = f"range_circle_{i}"
+            self.plotter.remove_actor(name)
+            r = radius_m / self._mpu
+            pts = np.column_stack([center[0] + r * np.cos(t), center[1] + r * np.sin(t),
+                                   np.full_like(t, center[2])])
+            self.plotter.add_mesh(pv.lines_from_points(pts), color=color,
+                                  line_width=_CIRCLE_WIDTH, name=name, pickable=False,
+                                  lighting=False, reset_camera=False)
 
     def _ray_plane(self, x, y, z0):
         """World point where the pick ray through display (x, y) meets plane z=z0."""
@@ -807,20 +825,23 @@ def render_scene(
     texture_on: bool = True,
     arrow_az=None,
     arrow_el=None,
+    circle_radii=None,
 ):
     """Open the interactive editor on ``scene``.
 
     When ``terrain`` is given, the GML is draped onto it; when ``geoimage`` is
     given, it is draped as a texture over the terrain (or a flat plane). When
     ``arrow_az``/``arrow_el`` are given, a red direction arrow is drawn to the
-    middle of the ground (double-click moves its tip). With ``off_screen=True``
+    middle of the ground (double-click moves its tip). ``circle_radii`` (metres,
+    up to 3) are drawn as red/orange/yellow horizontal circles around the tip. With ``off_screen=True``
     the view is built but not shown. Returns the :class:`pyvista.Plotter`; the
     :class:`GmlEditorView` is reachable via ``plotter._gml_view``.
     """
     view = GmlEditorView(scene, vexag=vexag, off_screen=off_screen,
                          window_title=window_title, terrain=terrain,
                          geoimage=geoimage, texture_on=texture_on,
-                         arrow_az=arrow_az, arrow_el=arrow_el)
+                         arrow_az=arrow_az, arrow_el=arrow_el,
+                         circle_radii=circle_radii)
     # Stash so --screenshot / tests can reach edit methods if needed.
     view.plotter._gml_view = view
     if not off_screen:

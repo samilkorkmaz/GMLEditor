@@ -38,7 +38,8 @@ class EditorWindow(QtWidgets.QMainWindow):
     """Main window: top panel over the embedded 3D editor."""
 
     def __init__(self, scene, *, vexag=1.0, terrain=None, geoimage=None,
-                 texture_on=True, arrow_az=None, arrow_el=None, files=None):
+                 texture_on=True, arrow_az=None, arrow_el=None, files=None,
+                 circle_radii=None):
         super().__init__()
         from pyvistaqt import QtInteractor
 
@@ -61,7 +62,7 @@ class EditorWindow(QtWidgets.QMainWindow):
         self.view = GmlEditorView(
             scene, vexag=vexag, terrain=terrain, geoimage=geoimage,
             texture_on=texture_on, arrow_az=arrow_az, arrow_el=arrow_el,
-            plotter=self._interactor,
+            plotter=self._interactor, circle_radii=circle_radii,
         )
         # Ensure an arrow exists so the panel fields are always meaningful.
         if self.view.arrow_state() is None:
@@ -181,12 +182,13 @@ class EditorWindow(QtWidgets.QMainWindow):
 
 
 def launch(scene, *, vexag=1.0, terrain=None, geoimage=None, texture_on=True,
-           arrow_az=None, arrow_el=None, files=None) -> int:
+           arrow_az=None, arrow_el=None, files=None, circle_radii=None) -> int:
     """Open the Qt editor window and run the event loop. Returns the exit code."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     win = EditorWindow(
         scene, vexag=vexag, terrain=terrain, geoimage=geoimage,
         texture_on=texture_on, arrow_az=arrow_az, arrow_el=arrow_el, files=files,
+        circle_radii=circle_radii,
     )
     win.resize(1100, 760)
     win.show()

@@ -10,6 +10,8 @@ DTED can be downloaded from: https://earthexplorer.usgs.gov/
 
 GeoTIFF can be downloaded from: https://geodataviewer.com/tools/satellite-download/
 
+
+
 ## Requirements
 
 - Python 3.10+
@@ -28,7 +30,7 @@ pip install --user tifffile imagecodecs      # for real-world GeoTIFFs
 ## Usage
 
 ```
-python -m gml_editor <gml> [<dted>] [<geotiff>] [--vexag FACTOR] [--screenshot PATH]
+python -m gml_editor <gml> [<dted>] [<geotiff>] [--vexag FACTOR] [--circles r1_m r2_m r3_m] [--screenshot PATH]
 ```
 
 Examples:

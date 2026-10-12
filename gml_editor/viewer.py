@@ -62,6 +62,9 @@ _NO_TEXTURE_TERRAIN = "#6b7a5e"
 # Direction arrow.
 _ARROW_COLOR = "#e23b3b"
 _ARROW_OPACITY = 0.5
+# Opaque triangle at the arrow tip, as fractions of the arrow length.
+_ARROW_HEAD_LENGTH = 0.06
+_ARROW_HEAD_HALF_WIDTH = 0.025
 
 
 def arrow_direction(az_deg: float, el_deg: float) -> np.ndarray:
@@ -515,6 +518,7 @@ class GmlEditorView:
         tail = self._arrow_tip + u * self._arrow_len   # up toward the source
         direction = self._arrow_tip - tail             # points down to the ground
         self.plotter.remove_actor("direction_arrow")
+        self.plotter.remove_actor("direction_arrow_head")
         arrow = pv.Arrow(
             start=tail, direction=direction, scale=float(np.linalg.norm(direction)),
             tip_length=0.02, tip_radius=0.005, shaft_radius=0.002,
@@ -523,6 +527,19 @@ class GmlEditorView:
         # others. reset_camera=False so moving the arrow doesn't jump the view.
         self.plotter.add_mesh(arrow, color=_ARROW_COLOR, opacity=_ARROW_OPACITY,
                               name="direction_arrow",
+                              pickable=False, lighting=False, reset_camera=False)
+
+        # Flat triangle with its apex on the tip, lying in the arrow's vertical
+        # plane (spanned by the arrow and the up axis) so it reads as a head.
+        d = direction / np.linalg.norm(direction)
+        az = math.radians(self._arrow_az)
+        normal = np.array([math.cos(az), -math.sin(az), 0.0])  # horizontal, off-plane
+        side = np.cross(d, normal)
+        base = self._arrow_tip - d * (self._arrow_len * _ARROW_HEAD_LENGTH)
+        half = side * (self._arrow_len * _ARROW_HEAD_HALF_WIDTH)
+        head = pv.PolyData(np.array([self._arrow_tip, base + half, base - half]),
+                           faces=np.array([3, 0, 1, 2]))
+        self.plotter.add_mesh(head, color=_ARROW_COLOR, name="direction_arrow_head",
                               pickable=False, lighting=False, reset_camera=False)
 
     def _ray_plane(self, x, y, z0):

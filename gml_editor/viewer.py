@@ -549,7 +549,7 @@ class GmlEditorView:
         self.plotter.remove_actor("direction_arrow")
         arrow = pv.Arrow(
             start=tail, direction=direction, scale=float(np.linalg.norm(direction)),
-            tip_length=0.22, tip_radius=0.05, shaft_radius=0.018,
+            tip_length=0.02, tip_radius=0.005, shaft_radius=0.002,
         )
         # Built directly in world space, so it is NOT aspect-scaled like the
         # others. reset_camera=False so moving the arrow doesn't jump the view.
